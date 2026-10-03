@@ -140,13 +140,13 @@ actor SAICService {
 
     /// 电压归一化：服务端不同接口版本量纲不一（×10 或 ×100），取落在 8~18V 的候选
     private static func normalizeVoltage(_ v: Double) -> Double {
-        let candidates = [v / 100.0, v / 10.0, v]
+        let candidates = [v, v / 10.0, v / 100.0]
         return candidates.first { (8.0...18.0).contains($0) } ?? (v / 10.0)
     }
 
-    /// 百分比归一化：同理，取落在 0~100% 的候选
+    /// 百分比归一化：同理，取落在 0~100% 的候选（先试原值本身）
     private static func normalizePercent(_ v: Double) -> Double {
-        let candidates = [v / 100.0, v / 10.0, v]
+        let candidates = [v, v / 10.0, v / 100.0]
         return candidates.first { (0.0...100.0).contains($0) } ?? (v / 10.0)
     }
 
