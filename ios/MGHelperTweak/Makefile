@@ -12,6 +12,8 @@ mghelper_CODESIGN_FLAGS  = -Smghelper.entitlements
 
 include $(THEOS_MAKE_PATH)/tool.mk
 
-# 确保 postinst 有执行位（git/Windows 不保留权限）
+# setuid 提权：iOS 上各 App 容器属于独立本地用户，mobile 身份读不了 MG Live 沙盒。
+# 直接在 staging 阶段把二进制设为 4755(root, setuid)，打包进 data.tar 的 mode 会保留。
+# （此 theos 分支不自动收录项目根的 postinst 脚本，故在 Makefile 里做）
 after-stage::
-	@chmod 755 $(THEOS_STAGING_DIR)/DEBIAN/postinst 2>/dev/null || true
+	@chmod 6755 $(THEOS_STAGING_DIR)/usr/bin/mghelper && echo ">> setuid set: $$(ls -l $(THEOS_STAGING_DIR)/usr/bin/mghelper)"
