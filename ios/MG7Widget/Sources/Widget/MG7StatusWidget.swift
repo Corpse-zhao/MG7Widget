@@ -274,6 +274,17 @@ struct LargeWidget: View {
                 Spacer()
             }
 
+            if entry.snapshot == nil {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 10))
+                        .foregroundColor(MGTheme.orange)
+                    Text("打开 App 刷新一次即出数据")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(MGTheme.orange)
+                }
+            }
+
             if let addr = entry.snapshot?.address, !addr.isEmpty {
                 HStack(spacing: 4) {
                     Image(systemName: "mappin.circle.fill").font(.system(size: 11))

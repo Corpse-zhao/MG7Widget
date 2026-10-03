@@ -15,23 +15,49 @@ enum MG7Store {
 
     private static let jailDir = "/var/mobile/Library/MG7Widget"
 
+    /// 确保共享目录可用，返回目录 URL；彻底不可用则返回 nil
+    ///
+    /// ⚠️ 权限模型（v0.3.5 修正）：
+    ///  - App（TrollStore）以 root 运行；Widget 扩展由系统以 mobile 用户拉起。
+    ///  - 旧版用「可写探针」判断 → mobile 的 Widget 对 root 目录写不进 →
+    ///    误判回退到扩展自己沙盒 → 读不到 snapshot.json → 小组件全 "—"。
+    ///  - Widget 只需要「可读」！探针改为可读性判断。
+    ///  - 目录显式 755、数据文件 644，App 端每次保存后强制修正权限。
+    private static func ensureSharedDir() -> URL? {
+        let fm = FileManager.default
+        let u = URL(fileURLWithPath: jailDir)
+
+        if fm.fileExists(atPath: jailDir) {
+            // 已存在：可读即用（Widget 场景只读就够）
+            if fm.isReadableFile(atPath: u.path) { return u }
+            // 不可读：尝试修权限（root 场景会成功；mobile 场景失败 → nil）
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: jailDir)
+            return fm.isReadableFile(atPath: u.path) ? u : nil
+        }
+        // 不存在：创建（App 首启；Widget 也可能先跑，mobile 对 /var/mobile/Library 可写）
+        do {
+            try fm.createDirectory(at: u, withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o755])
+            return u
+        } catch {
+            return nil
+        }
+    }
+
     /// 共享目录。越狱环境用固定路径，否则回退沙盒。
     static var directory: URL {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: "/var/mobile/Library") {
-            let u = URL(fileURLWithPath: jailDir)
-            if !fm.fileExists(atPath: jailDir) {
-                try? fm.createDirectory(at: u, withIntermediateDirectories: true)
-            }
-            // 验证可写，不可写则回退
-            let probe = u.appendingPathComponent(".probe")
-            if fm.createFile(atPath: probe.path, contents: Data()) {
-                try? fm.removeItem(at: probe)
-                return u
-            }
-        }
-        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        if let u = ensureSharedDir() { return u }
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return docs
+    }
+
+    /// App 端调用：写完数据后把共享目录和文件权限修到「mobile 可读」
+    private static func fixPermissions(file: String? = nil) {
+        let fm = FileManager.default
+        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: jailDir)
+        if let f = file {
+            try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: f)
+        }
     }
 
     static var configURL:   URL { directory.appendingPathComponent("config.plist") }
@@ -61,8 +87,9 @@ enum MG7Store {
         enc.outputFormat = .xml
         guard let data = try? enc.encode(c) else { return }
         try? data.write(to: configURL, options: .atomic)
-        try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o600], ofItemAtPath: configURL.path)
+        // 644（不再 600）：Widget(mobile) 要读车名等展示字段；
+        // token 在越狱机上本就无绝对边界，644 风险增量可忽略
+        fixPermissions(file: configURL.path)
     }
 
     static func loadConfig() -> Config {
@@ -79,8 +106,8 @@ enum MG7Store {
         enc.dateEncodingStrategy = .iso8601
         guard let data = try? enc.encode(s) else { return }
         try? data.write(to: snapshotURL, options: .atomic)
-        try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o644], ofItemAtPath: snapshotURL.path)
+        // 关键：目录 755 + 文件 644，否则 mobile 用户的 Widget 扩展读不到
+        fixPermissions(file: snapshotURL.path)
     }
 
     static func loadSnapshot() -> VehicleSnapshot? {
