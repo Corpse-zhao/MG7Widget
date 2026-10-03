@@ -115,9 +115,29 @@ struct ControlPanel: View {
         resultText = nil
         defer { isSending = false }
 
-        // ⚠️ 控车接口待逆向，先给出明确提示
-        // 接口实现后替换为: try await SAICService.shared.sendCommand(...)
-        try? await Task.sleep(nanoseconds: 400_000_000)
-        resultText = "控车接口开发中：需先完成 MG Live 控车请求逆向（见 docs/03-控车逆向.md）"
+        // ControlAction → SAICService.Command
+        let cmd: SAICService.Command
+        switch action {
+        case .lock:   cmd = .lock
+        case .unlock: cmd = .unlock
+        case .acOn:   cmd = .acOn
+        case .acOff:  cmd = .acOff
+        }
+
+        do {
+            let msg = try await SAICService.shared.sendCommand(
+                cmd,
+                token: vm.config.accessToken,
+                vin: vm.config.vin,
+                userId: vm.config.userId,
+                userName: vm.config.carName)
+            resultText = "✓ \(msg)"
+            // 控车成功后刷新一次车况（锁车状态会变）
+            await vm.refresh()
+        } catch let e as SAICError {
+            resultText = "✗ \(e.errorDescription ?? "未知错误")"
+        } catch {
+            resultText = "✗ \(error.localizedDescription)"
+        }
     }
 }
