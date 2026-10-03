@@ -1,31 +1,27 @@
 //
-//  main.m  —  MGHelper
+//  main.m  —  MGHelper v0.1.1
 //  越狱辅助工具：自动从 MG Live 沙盒捞 ACCESS_TOKEN，写入共享层，
 //  免去每次手动抓包填 token。
 //
-//  编译：gmake package THEOS_PACKAGE_SCHEME=roothide
+//  v0.1.1 改动：
+//   - 不再依赖猜测的 bundle id，改为全容器全量扫描（token 形如 xxx-prod_SAIC，特征唯一）
+//   - 数据容器路径 /var/mobile/Containers/Data/Application 不再用 jbroot() 包裹
+//     （roothide 的 jbroot 只映射引导区；用户数据区包 jbroot 反而指向不存在路径）
+//   - 二进制文件用 Latin1 无损转换后扫描（SQLite/二进制缓存里藏的 token 也能捞到）
+//   - 新增 diag 模式：打印所有容器 bundle id 清单，便于远程确认 MG Live 真实 bundle id
+//
+//  用法：
+//   mghelper          扫描并写 token 到 /var/mobile/Library/MGLiveWidget/token_raw.txt
+//   mghelper diag     同上，另打印全部容器 bundle id + 扫描统计
+//   mghelper dump     打印已保存的 token
 //
 
 #import <Foundation/Foundation.h>
-#include <roothide.h>   // roothide 的 jbroot() 宏，需 roothide/theos
 
 #define SHARED_DIR  @"/var/mobile/Library/MGLiveWidget"
 
-// MG Live 的 bundle id（待用 `ipainstaller -l` 或 Filza 确认真实值）
-static NSString *const kMGLiveBundleIDs[] = {
-    @"com.saicmotor.mglive",
-    @"com.saic.mglive",
-    @"com.saicmotor.mg",
-    nil
-};
-
-#pragma mark - 工具
-
-static NSArray<NSString *> *appDataContainers(void) {
-    // roothide 下真实容器目录
-    NSString *base = jbroot(@"/var/mobile/Containers/Data/Application");
-    return [[NSFileManager defaultManager] contentsOfDirectoryAtPath:base error:nil];
-}
+static int g_scannedContainers = 0;
+static int g_scannedFiles = 0;
 
 static NSString *metaBundleID(NSString *containerPath) {
     NSString *plist = [containerPath stringByAppendingPathComponent:
@@ -34,80 +30,106 @@ static NSString *metaBundleID(NSString *containerPath) {
     return d[@"MCMMetadataIdentifier"];
 }
 
-/// 在 MG Live 容器里递归找形如 *-prod_SAIC 的 token
-static NSString *findTokenInDirectory(NSString *dir, NSInteger depth) {
+/// 在目录里递归找形如 *-prod_SAIC 的 token；outPath 返回命中文件路径
+static NSString *findTokenInDirectory(NSString *dir, NSInteger depth, NSString **outPath) {
     if (depth <= 0) return nil;
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray *items = [fm contentsOfDirectoryAtPath:dir error:nil];
+    if (!items) return nil;
     for (NSString *it in items) {
         NSString *p = [dir stringByAppendingPathComponent:it];
         BOOL isDir = NO;
         [fm fileExistsAtPath:p isDirectory:&isDir];
         if (isDir) {
-            NSString *found = findTokenInDirectory(p, depth - 1);
+            NSString *found = findTokenInDirectory(p, depth - 1, outPath);
             if (found) return found;
             continue;
         }
-        // 只扫小文本/plist，避免读垃圾
+        // >8MB 的文件（地图缓存/视频等）不可能藏 token，跳过
         NSNumber *sz = [fm attributesOfItemAtPath:p error:nil][NSFileSize];
-        if (sz && sz.longLongValue > 512 * 1024) continue;
+        if (sz && sz.longLongValue > 8 * 1024 * 1024) continue;
 
         NSData *data = [NSData dataWithContentsOfFile:p];
         if (!data || data.length < 32) continue;
-        NSString *txt = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        if (!txt) {
-            // 尝试二进制 plist → 序列化回文本
-            id obj = [NSPropertyListSerialization propertyListWithData:data
-                                                              options:0
-                                                               format:NULL
-                                                                error:nil];
-            if (obj) {
-                NSData *j = [NSPropertyListSerialization dataWithPropertyList:obj
-                                    format:NSPropertyListXMLFormat_v1_0 options:0 error:nil];
-                txt = [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding];
-            }
-        }
+        g_scannedFiles++;
+
+        // Latin1：字节→字符 1:1 无损映射，任何二进制（SQLite/缓存/二进制plist）都能扫
+        // token 是纯 ASCII，不会被编码转换破坏
+        NSString *txt = [[NSString alloc] initWithData:data
+                                             encoding:NSISOLatin1StringEncoding];
         if (!txt) continue;
 
-        // 匹配 xxx-prod_SAIC
+        // 匹配 xxx-prod_SAIC（16 位以上前缀）
         NSRegularExpression *re = [NSRegularExpression
             regularExpressionWithPattern:@"[A-Za-z0-9_\\-\\.]{16,}-prod_SAIC"
                                  options:0 error:nil];
         NSTextCheckingResult *m = [re firstMatchInString:txt
                                                  options:0
                                                    range:NSMakeRange(0, txt.length)];
-        if (m) return [txt substringWithRange:m.range];
+        if (m) {
+            if (outPath) *outPath = p;
+            return [txt substringWithRange:m.range];
+        }
     }
     return nil;
 }
 
 #pragma mark - 主逻辑
 
-static int refreshToken(void) {
+static int refreshToken(BOOL diag) {
     NSFileManager *fm = [NSFileManager defaultManager];
     [fm createDirectoryAtPath:SHARED_DIR
   withIntermediateDirectories:YES attributes:nil error:nil];
 
-    for (int i = 0; kMGLiveBundleIDs[i]; i++) {
-        NSString *want = kMGLiveBundleIDs[i];
-        for (NSString *uuid in appDataContainers()) {
-            NSString *container = [jbroot(@"/var/mobile/Containers/Data/Application")
-                                   stringByAppendingPathComponent:uuid];
-            if (![metaBundleID(container) isEqualToString:want]) continue;
+    // 用户数据区：roothide 下真实路径原样存在，不需要 jbroot()
+    NSString *base = @"/var/mobile/Containers/Data/Application";
+    NSArray *uuids = [fm contentsOfDirectoryAtPath:base error:nil];
+    NSLog(@"[MGHelper] 数据容器数量: %@",
+          uuids ? [NSString stringWithFormat:@"%lu", (unsigned long)uuids.count]
+                : @"路径不可读!");
 
-            NSString *token = findTokenInDirectory(container, 6);
+    if (diag) {
+        NSLog(@"[MGHelper] ---- 全部容器 bundle id ----");
+        for (NSString *u in uuids) {
+            NSString *c = [base stringByAppendingPathComponent:u];
+            NSLog(@"[MGHelper]   %@ -> %@", u, metaBundleID(c) ?: @"(无meta)");
+        }
+        NSLog(@"[MGHelper] ----------------------------");
+    }
+
+    for (NSString *u in uuids) {
+        @autoreleasepool {
+            NSString *container = [base stringByAppendingPathComponent:u];
+            g_scannedContainers++;
+            NSString *foundPath = nil;
+            NSString *token = findTokenInDirectory(container, 7, &foundPath);
             if (token) {
+                NSString *bundle = metaBundleID(container) ?: @"unknown";
                 NSString *out = [SHARED_DIR stringByAppendingPathComponent:@"token_raw.txt"];
                 [token writeToFile:out atomically:YES
                           encoding:NSUTF8StringEncoding error:nil];
                 [fm setAttributes:@{NSFilePosixPermissions: @0600}
-                     ofItemAtPath:out error:nil];
-                NSLog(@"[MGHelper] token acquired (tail: ...%@)", [token substringFromIndex:token.length-16]);
+                       ofItemAtPath:out error:nil];
+                // 附带元信息，便于确认 MG Live 真实 bundle id 和 token 存储位置
+                NSString *meta = [NSString stringWithFormat:
+                    @"bundle=%@\nfile=%@\ngrabbed=%@\n",
+                    bundle, foundPath,
+                    [NSDate dateWithTimeIntervalSinceNow:8*3600]];
+                [meta writeToFile:[SHARED_DIR stringByAppendingPathComponent:@"token_meta.txt"]
+                       atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+                NSLog(@"[MGHelper] ✓ 找到 token!");
+                NSLog(@"[MGHelper]   bundle: %@", bundle);
+                NSLog(@"[MGHelper]   文件:   %@", foundPath);
+                NSLog(@"[MGHelper]   尾部:   ...%@",
+                      [token substringFromIndex:token.length - 16]);
                 return 0;
             }
         }
     }
-    NSLog(@"[MGHelper] token NOT found");
+    NSLog(@"[MGHelper] token NOT found（扫了 %d 个容器 / %d 个文件）",
+          g_scannedContainers, g_scannedFiles);
+    NSLog(@"[MGHelper] 若容器数为 0 或 MG Live 刚登录，请先打开 MG Live 再跑一次");
     return 1;
 }
 
@@ -123,6 +145,7 @@ int main(int argc, char *argv[]) {
     @autoreleasepool {
         setuid(0); setgid(0);
         if (argc > 1 && strcmp(argv[1], "dump") == 0) return dumpToken();
-        return refreshToken();
+        if (argc > 1 && strcmp(argv[1], "diag") == 0) return refreshToken(YES);
+        return refreshToken(NO);
     }
 }
