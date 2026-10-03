@@ -1,0 +1,13 @@
+#!/bin/bash
+# mghelper postinst: 给二进制加 setuid 位（owner root），让 mobile 用户跑它时自动提权
+# —— iOS 上各 App 容器属于独立本地用户，mobile 身份读不了 MG Live 的沙盒，必须 root
+BIN=""
+for p in /usr/bin/mghelper /var/jb/usr/bin/mghelper; do
+    [ -f "$p" ] && BIN="$p" && break
+done
+if [ -n "$BIN" ]; then
+    chown root:wheel "$BIN"
+    chmod 6755 "$BIN"
+    echo "MGHelper: setuid bit set on $BIN"
+fi
+exit 0

@@ -1,6 +1,6 @@
 Package: com.banliren.mghelper
 Name: MGHelper
-Version: 0.1.1
+Version: 0.1.2
 Architecture: iphoneos-arm64
 Description: MG Live 车况小组件 - 越狱辅助工具（自动获取登录凭证）
 Maintainer: 板栗仁
