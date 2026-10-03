@@ -64,6 +64,30 @@ struct MG7WidgetView: View {
     let entry: MG7Entry
 
     var body: some View {
+        // ⚠️ 关键：iOS 17+ WidgetKit 要求显式提供 containerBackground。
+        // 缺失时系统会用深色/材质底 → 配深色文字看起来「全黑」。
+        // 目标系统是 iOS 16.6，故用 if #available 做可用性分支。
+        Group {
+            if #available(iOS 17.0, *) {
+                content
+                    .containerBackground(for: .widget) { widgetBackground }
+            } else {
+                content
+                    .background(widgetBackground)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .environment(\.colorScheme, .light)   // 强制浅色，深色模式下也保持可读
+    }
+
+    private var widgetBackground: some View {
+        LinearGradient(
+            colors: [Color.white, Color(red: 0.97, green: 0.97, blue: 0.98)],
+            startPoint: .top, endPoint: .bottom)
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch family {
         case .systemSmall:  SmallWidget(entry: entry)
         case .systemMedium: MediumWidget(entry: entry)
@@ -102,6 +126,8 @@ struct SmallWidget: View {
             .foregroundColor(fuelColor)
         }
         .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(MGTheme.widgetBg)          // iOS 16 兜底（无 containerBackground API）
         .widgetURL(nil)
     }
 
@@ -159,6 +185,8 @@ struct MediumWidget: View {
             }
         }
         .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(MGTheme.widgetBg)
     }
 
     private func metric(_ t: String, _ v: String, _ u: String, accent: Color) -> some View {
@@ -257,6 +285,8 @@ struct LargeWidget: View {
             Spacer(minLength: 0)
         }
         .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(MGTheme.widgetBg)
     }
 
     private func bigMetric(_ t: String, _ v: String, _ u: String, _ c: Color) -> some View {

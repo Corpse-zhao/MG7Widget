@@ -18,6 +18,9 @@ enum MGTheme {
     static let success     = Color(red: 0.18, green: 0.65, blue: 0.35)
     static let tyreBlue    = Color(red: 0.20, green: 0.45, blue: 0.75)
 
+    /// Widget 容器背景（必须是浅色实底，否则 iOS 17 深色容器 + 深色文字 = 全黑）
+    static let widgetBg    = Color(red: 0.98, green: 0.98, blue: 0.99)
+
     static let gradient = LinearGradient(
         colors: [orange, orangeLight],
         startPoint: .topLeading, endPoint: .bottomTrailing)

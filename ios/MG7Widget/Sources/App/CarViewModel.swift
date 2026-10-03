@@ -25,6 +25,8 @@ final class CarViewModel: ObservableObject {
         self.config = MG7Store.loadConfig()
         self.snapshot = MG7Store.loadSnapshot()
         updateRefreshText()
+        let key = self.config.amapKey
+        if !key.isEmpty { Task { await LocationService.shared.setAmapKey(key) } }
     }
 
     func onLaunch() {
@@ -33,6 +35,13 @@ final class CarViewModel: ObservableObject {
         } else {
             showingSettings = true
         }
+    }
+
+    /// 切回前台时调用：数据超过 2 分钟才重新拉，避免频繁请求触发风控
+    func autoRefreshIfNeeded() async {
+        guard config.isValid, !isLoading else { return }
+        if let s = snapshot, Date().timeIntervalSince(s.fetchedAt) < 120 { return }
+        await refresh()
     }
 
     // MARK: - 刷新
@@ -79,6 +88,8 @@ final class CarViewModel: ObservableObject {
     func updateConfig(_ c: MG7Store.Config) {
         config = c
         MG7Store.saveConfig(c)
+        let key = c.amapKey
+        Task { await LocationService.shared.setAmapKey(key) }
     }
 
     func saveToken(_ token: String, vin: String, userId: String) {

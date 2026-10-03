@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @ObservedObject var vm: CarViewModel
@@ -30,14 +31,34 @@ struct ContentView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 28)
             }
+            // ✅ 下拉刷新必须挂在 ScrollView 上；挂在 NavigationView 外层在
+            //    navigationBarHidden 的 iOS 16 环境里不生效。
+            .refreshable { await vm.refresh() }
             .background(Color(red: 0.96, green: 0.96, blue: 0.97).ignoresSafeArea())
             .navigationBarHidden(true)
+            .overlay(alignment: .top) { refreshBanner }
             .sheet(isPresented: $vm.showingSettings) {
                 SettingsView(vm: vm)
             }
-            .refreshable { await vm.refresh() }
         }
         .navigationViewStyle(.stack)
+    }
+
+    /// 刷新中的顶部提示条（下拉刷新时给用户可见反馈）
+    @ViewBuilder
+    private var refreshBanner: some View {
+        if vm.isLoading {
+            HStack(spacing: 6) {
+                ProgressView().scaleEffect(0.7)
+                Text("正在获取车况…").font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 7)
+            .background(MGTheme.orange)
+            .clipShape(Capsule())
+            .padding(.top, 6)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
     }
 
     // MARK: 顶部
@@ -236,9 +257,19 @@ struct ContentView: View {
                         .foregroundColor(MGTheme.textPrimary)
                 }
                 if let lat = s.latitude, let lon = s.longitude {
-                    Text(String(format: "%.6f, %.6f", lat, lon))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(MGTheme.textSecondary)
+                    HStack {
+                        Text(String(format: "%.6f, %.6f", lat, lon))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(MGTheme.textSecondary)
+                        Spacer()
+                        Button {
+                            UIPasteboard.general.string = String(format: "%.6f,%.6f", lat, lon)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 12))
+                                .foregroundColor(MGTheme.orange)
+                        }
+                    }
                     Button {
                         openMaps(lat: lat, lon: lon)
                     } label: {

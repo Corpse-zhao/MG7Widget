@@ -2,7 +2,16 @@
 //  LocationService.swift
 //  MG7Widget
 //
-//  位置服务：反地理编码（用 iOS 原生 CLGeocoder，无需第三方 API）
+//  位置服务：经纬度 → 中文地址
+//
+//  精度策略（2026-10-03 修订）：
+//   1. 优先高德 Web 服务逆地理（最高精度，国内路名/门牌准确）——需用户在设置里填 key
+//   2. 没有 key 时回退 iOS 原生 CLGeocoder（免费，但国内只到 POI/街道级，易串到隔壁）
+//   3. 两者都失败则至少把原始经纬度保留给用户（可直达导航）
+//
+//  坐标系说明：SAIC 返回的是 WGS-84（GPS 原始值）。
+//   高德 Web API 默认吃 GCJ-02，故请求时带 coordsys=wgs84 让它自行转换。
+//   Apple 地图在中国大陆会自动做 WGS-84 → GCJ-02 纠偏，所以导航 URL 直接用原值即可。
 //
 
 import Foundation
@@ -16,33 +25,124 @@ actor LocationService {
     private let geocoder = CLGeocoder()
     private var cache: [String: String] = [:]
 
+    /// 高德 Web 服务 key（设置页填写，为空则只用 CLGeocoder）
+    private var amapKey: String = ""
+    func setAmapKey(_ v: String) {
+        amapKey = v.trimmingCharacters(in: .whitespacesAndNewlines)
+        cache.removeAll()   // key 变了，缓存作废
+    }
+
+    /// 最近一次地址来源，便于 UI 提示精度
+    private(set) var lastSource: String = ""
+
     /// 经纬度 → 中文地址
     func reverseGeocode(lat: Double?, lon: Double?) async -> String? {
         guard let lat = lat, let lon = lon, lat != 0, lon != 0 else { return nil }
-        let key = String(format: "%.4f,%.4f", lat, lon)   // 4 位精度做缓存键
+        let key = String(format: "%.5f,%.5f", lat, lon)   // 5 位小数 ≈ 1m
         if let hit = cache[key] { return hit }
 
+        // 1) 高德（高精度）
+        if !amapKey.isEmpty, let addr = await amap(lat: lat, lon: lon) {
+            cache[key] = addr; lastSource = "高德"
+            return addr
+        }
+
+        // 2) CLGeocoder 回退
+        if let addr = await clGeocode(lat: lat, lon: lon) {
+            cache[key] = addr; lastSource = "系统"
+            return addr
+        }
+        lastSource = "仅坐标"
+        return nil
+    }
+
+    // MARK: - 高德 Web 服务逆地理
+
+    private func amap(lat: Double, lon: Double) async -> String? {
+        // coordsys=wgs84：告诉高德我们给的是 GPS 原始坐标，由它转 GCJ-02
+        let urlStr = "https://restapi.amap.com/v3/geocode/regeo"
+            + "?key=\(amapKey)"
+            + "&location=\(String(format: "%.6f,%.6f", lon, lat))"
+            + "&coordsys=wgs84"
+            + "&extensions=base"
+            + "&output=JSON"
+        guard let url = URL(string: urlStr) else { return nil }
+
+        do {
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 8
+            let (data, _) = try await URLSession.shared.data(for: req)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (obj["status"] as? String) == "1",
+                  let regeo = obj["regeocode"] as? [String: Any]
+            else { return nil }
+
+            // formatted_address 形如「广东省广州市海珠区瑞宝街道XX路XX号」
+            if let formatted = regeo["formatted_address"] as? String, !formatted.isEmpty {
+                // 若含门牌号更佳；否则用「区+街道+路名」
+                if let comp = regeo["addressComponent"] as? [String: Any] {
+                    let street = (comp["township"] as? String) ?? ""
+                    let num = (comp["streetNumber"] as? [String: Any])?["street"] as? String ?? ""
+                    let road = (comp["streetNumber"] as? [String: Any])?["street"] as? String ?? ""
+                    if !road.isEmpty {
+                        var s = formatted
+                        // 把「街道」和「路名」拼进去，提高到达精度
+                        if !street.isEmpty, !s.contains(street) { s += street }
+                        if !num.isEmpty, !s.contains(num) { s += num }
+                        return s
+                    }
+                }
+                return formatted
+            }
+            return nil
+        } catch {
+            return nil
+        }
+    }
+
+    // MARK: - CLGeocoder 回退
+
+    private func clGeocode(lat: Double, lon: Double) async -> String? {
         let loc = CLLocation(latitude: lat, longitude: lon)
         do {
             let placemarks = try await geocoder.reverseGeocodeLocation(
                 loc, preferredLocale: Locale(identifier: "zh_CN"))
-            guard let p = placemarks.first else { return nil }
+            // CLGeocoder 常返回多个候选，first 未必信息最全 → 取描述最完整的一个
+            let best = placemarks.max { a, b in
+                score(a) < score(b)
+            }
+            guard let p = best else { return nil }
             var parts: [String] = []
-            if let a = p.administrativeArea { parts.append(a) }
-            if let c = p.locality, c != p.administrativeArea { parts.append(c) }
-            if let d = p.subLocality { parts.append(d) }
+            if let a = p.administrativeArea { parts.append(a) }        // 省
+            if let c = p.locality, c != p.administrativeArea { parts.append(c) }  // 市
+            if let d = p.subLocality { parts.append(d) }               // 区
+            if let s = p.subAdministrativeArea, !parts.contains(s) { parts.append(s) } // 街道办
+            // 街道级：road + 门牌号
             if let t = p.thoroughfare {
                 var road = t
-                if let n = p.subThoroughfare { road += n }
+                if let n = p.subThoroughfare, !road.contains(n) { road += n }
                 parts.append(road)
-            } else if let n = p.name {
+            } else if let n = p.name, !parts.contains(n) {
                 parts.append(n)
             }
-            let addr = parts.joined()
-            if !addr.isEmpty { cache[key] = addr; return addr }
+            // 去重（相邻项可能重复，如「广州市 广州市」）
+            var out: [String] = []
+            for x in parts where !out.contains(x) { out.append(x) }
+            let addr = out.joined()
+            return addr.isEmpty ? nil : addr
         } catch {
             return nil
         }
-        return nil
+    }
+
+    /// 候选完整度打分：省市区街道门牌每有一项加分
+    private func score(_ p: CLPlacemark) -> Int {
+        var n = 0
+        if p.administrativeArea != nil { n += 1 }
+        if p.locality != nil { n += 1 }
+        if p.subLocality != nil { n += 1 }
+        if p.thoroughfare != nil { n += 2 }
+        if p.subThoroughfare != nil { n += 2 }
+        return n
     }
 }

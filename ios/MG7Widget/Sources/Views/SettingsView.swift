@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var userId = ""
     @State private var carName = ""
     @State private var plate = ""
+    @State private var amapKey = ""
 
     var body: some View {
         NavigationView {
@@ -51,11 +52,23 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    TextField("高德 Web 服务 key（可选）", text: $amapKey)
+                        .font(.system(size: 12, design: .monospaced))
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                } header: {
+                    Text("定位精度")
+                } footer: {
+                    Text("填了高德 key 后，地址会精确到街道门牌（推荐）。申请：lbs.amap.com → 控制台 → 应用管理 → 创建应用 → 添加 Key → 服务平台选「Web服务」。留空则用 iOS 系统定位，只到 POI/街道级。")
+                }
+
+                Section {
                     Button {
                         vm.saveToken(token, vin: vin, userId: userId)
                         var c = vm.config
                         c.carName = carName.isEmpty ? "我的 MG7" : carName
                         c.plateNumber = plate
+                        c.amapKey = amapKey.trimmingCharacters(in: .whitespacesAndNewlines)
                         vm.updateConfig(c)
                         dismiss()
                     } label: {
@@ -103,6 +116,7 @@ struct SettingsView: View {
                 userId = vm.config.userId
                 carName = vm.config.carName
                 plate = vm.config.plateNumber
+                amapKey = vm.config.amapKey
             }
         }
     }

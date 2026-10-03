@@ -48,6 +48,8 @@ enum MG7Store {
         var fuelCapacity: Double = 65.0     // MG7 油箱 65L（源码证实）
         var autoRefresh: Bool = true
         var lastTokenSync: Date = .distantPast
+        /// 高德 Web 服务 key（可选，填了定位更准；留空则用系统 CLGeocoder）
+        var amapKey: String = ""
 
         var isValid: Bool {
             !accessToken.isEmpty && vin.count == 17
