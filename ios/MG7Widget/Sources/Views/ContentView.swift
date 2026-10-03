@@ -16,6 +16,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     headerCard
+                    if let e = vm.errorMessage { errorBanner(e) }
                     if let s = vm.snapshot {
                         rangeRow(s)
                         tyreCard(s)
@@ -107,6 +108,31 @@ struct ContentView: View {
         guard let s = vm.snapshot else { return "questionmark.circle" }
         if s.doorOpen == true || s.windowOpen == true { return "exclamationmark.triangle.fill" }
         return (s.isLocked ?? false) ? "lock.fill" : "lock.open.fill"
+    }
+
+    // MARK: 错误横幅（醒目显示，失败原因一眼可见）
+
+    private func errorBanner(_ msg: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(msg).font(.system(size: 12, weight: .medium))
+                    .multilineTextAlignment(.leading)
+                if msg.contains("token") {
+                    Button { vm.showingSettings = true } label: {
+                        Text("去更新 token")
+                            .font(.system(size: 12, weight: .bold))
+                            .underline()
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundColor(MGTheme.danger)
+        .padding(12)
+        .background(MGTheme.danger.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     // MARK: 续航 + 油量
