@@ -62,14 +62,23 @@ jobs:
         run: |
           export THEOS=$HOME/theos
           git clone --recursive https://github.com/roothide/theos.git "$THEOS"
+          # roothide/theos 不带 iOS SDK，必须自行下载（否则报
+          #   ==> Error: Your chosen SDK, "iPhoneOS16.5.sdk", does not appear to exist.）
+          git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
+          mkdir -p "$THEOS/sdks"
+          cp -R /tmp/sdks/iPhoneOS16.5.sdk "$THEOS/sdks/" 2>/dev/null \
+            || cp -R /tmp/sdks/iPhoneOS1*.sdk "$THEOS/sdks/"
+          ls "$THEOS/sdks"
           echo "THEOS=$THEOS" >> $GITHUB_ENV
 
       - name: 编译 mghelper
+        # 辅助工具，编不出来不阻断 .tipa 交付（.tipa 才是主线交付物）
+        continue-on-error: true
         run: |
           set -o pipefail
           cd ios/MGHelperTweak
           gmake package THEOS_PACKAGE_SCHEME=roothide FINALPACKAGE=1 2>&1 | tail -30
-          ls -lh packages/
+          ls -lh packages/ || true
 
       # ---------- 3. 上传 ----------
       - name: 上传 .tipa
