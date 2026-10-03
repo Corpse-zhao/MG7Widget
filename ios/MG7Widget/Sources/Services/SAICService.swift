@@ -16,7 +16,6 @@
 //
 
 import Foundation
-import CommonCrypto
 
 enum SAICError: LocalizedError {
     case badConfig
@@ -190,18 +189,28 @@ actor SAICService {
         return s
     }
 
-    // MARK: - 控车（P5）
+    // MARK: - 控车（P5）—— 接口已逆向完成 ✅
     //
-    // 状态：接口形态待抓包确认（MG Live 控车走独立路径，与只读车况不同）。
-    // 抓包方法见 docs/03-控车逆向.md。
+    // 2026-10-03 抓包实证（两条真实请求对比）：
     //
-    // 设计目标：抓到包后，**只需填下面的 CommandSpec 表**即可上线，
-    //           不需要改动本文件其余逻辑。
+    //   GET https://mp.ebanma.com/app-mp/mqttpublish/1.0/mqttStatisticDataApi
+    //       ?data=<URL编码的 JSON>
     //
-    // 已预留三种认证模式（按抓到包的真实情况选一种）：
-    //   .plain      —— 无签名，参数直接发
-    //   .bodySign   —— sign = MD5(排序后的参数串 + secret)
-    //   .headersSign—— sign 放在请求头（原样重放即可）
+    //   data 解码后：
+    //   {"MQTTStatisticsDataDTO":"{\"commandId\":367794450,
+    //     \"timestamp7\":1791037107463,\"timestamp1\":1791037101027,
+    //     \"commandType\":\"上锁车门\",\"vin\":\"LSJWJ4W90SZ187922\",
+    //     \"aliClientId\":\"GID_ios_mg@@@318FE098-...\"}"}
+    //
+    // 要点：
+    //   - 指令本体 = commandType，**中文明文**（不是数字码）
+    //     实测：「上锁车门」/「开启空调」
+    //   - 外层 key = MQTTStatisticsDataDTO，其值是**一个被转义的 JSON 字符串**
+    //   - commandId 用前半段 2025+流水号；实测值 202503679445 / 367794450
+    //     ⇒ 服务端只做统计上报用途，我们自己生成即可（无需严格与服务端一致）
+    //   - 响应恒为 {"req_id":"...","data":null}（只受理），
+    //     真正执行结果走 MQTT 异步回报 → 调完刷新车况即可，不必自己连 MQTT
+    //   - 实测该接口**未强制校验 sign**（sign 每次不同，但车况接口同样不校验）
 
     enum Command: String {
         case lock   = "lock"
@@ -210,38 +219,29 @@ actor SAICService {
         case acOff  = "ac_off"
     }
 
-    /// 单条指令的接口描述 —— 抓包后只改这里
-    struct CommandSpec {
-        let method: String              // "POST" / "GET"
-        let path: String                // 相对路径，如 "/app-mp/vp/1.1/controlVehicle"
-        let bodyTemplate: [String: Any] // 请求体模板，用 {cmd} / {vin} / {token} 占位
-        let contentType: String         // "application/json" 或 "application/x-www-form-urlencoded"
+    /// 指令 → 服务端中文指令名（实测确认）
+    /// ⚠️ 未实测的按语义推测，首次使用请对照 App 行为核验
+    private static func commandTypeText(_ cmd: Command) -> String {
+        switch cmd {
+        case .lock:   return "上锁车门"      // ✅ 实测（22:19 抓包）
+        case .unlock: return "解锁车门"      // ⚠️ 推测（请核验）
+        case .acOn:   return "开启空调"      // ✅ 实测（22:03 抓包）
+        case .acOff:  return "关闭空调"      // ⚠️ 推测（请核验）
+        }
     }
 
-    /// ⚠️ 待抓包填充：把下面三条换成真实值
-    /// 若三条指令共用同一路径、只是 command 值不同，可合并成一条 spec。
-    private static let commandSpecs: [Command: CommandSpec] = [:]
-    // 填充示例（抓到包后照抄真实值，删掉注释即可）：
-    //
-    //  [.unlock: CommandSpec(
-    //      method: "POST",
-    //      path: "/app-mp/vp/1.1/controlVehicle",
-    //      bodyTemplate: ["command": "unlock", "vin": "{vin}", "token": "{token}"],
-    //      contentType: "application/json")],
-    //  [.lock:   CommandSpec(... "command": "lock"  ...)],
-    //  [.acOn:   CommandSpec(... "command": "ac_on" ...)],
+    /// 控车接口路径（实测）
+    private let controlPath = "/app-mp/mqttpublish/1.0/mqttStatisticDataApi"
 
-    /// 认证模式枚举
-    enum AuthMode {
-        case plain
-        case bodySign(secret: String)
-        case headersSign(headers: [String: String])
-    }
+    /// 该设备的 aliClientId —— 实测形如 GID_ios_mg@@@<UUID>
+    /// 从 MG Live 抓包得到，或由 MGHelper 提供；缺失时用固定前缀兜底
+    private var aliClientId: String = "GID_ios_mg@@@318FE098-2FDD-43DD-906A-5CD3574B456D"
 
-    /// ⚠️ 待抓包确认：看抓到的请求里 sign 是否出现、放哪
-    private static let authMode: AuthMode = .plain
+    /// 允许外部注入真实的 aliClientId（设置页/MGHelper 提供）
+    func setAliClientId(_ v: String) { if !v.isEmpty { aliClientId = v } }
 
     /// ⚠️ 安全要求：调用前必须有 UI 二次确认，禁止静默执行。
+    /// 返回服务端受理提示；实际执行结果需稍后刷新车况确认。
     func sendCommand(_ cmd: Command,
                      token: String,
                      vin: String,
@@ -250,68 +250,40 @@ actor SAICService {
 
         guard !token.isEmpty, vin.count == 17 else { throw SAICError.badConfig }
 
-        // 1. 取指令描述；未配置说明尚未完成逆向
-        guard let spec = Self.commandSpecs[cmd] else {
-            throw SAICError.api("NOT_IMPLEMENTED",
-                "该指令的接口尚未配置（需按 docs/03-控车逆向.md 抓包后填入 CommandSpec）")
-        }
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        // 内层 JSON（字段顺序与实测一致，用数组保序构造）
+        let inner = Self.buildInnerJSON(
+            commandId: Self.makeCommandId(),
+            ts7: now,
+            ts1: now - 6000,
+            commandType: Self.commandTypeText(cmd),
+            vin: vin,
+            aliClientId: aliClientId)
 
-        // 2. 组装参数：替换占位符
-        var body: [String: Any] = [:]
-        for (k, v) in spec.bodyTemplate {
-            if let s = v as? String {
-                switch s {
-                case "{vin}":      body[k] = vin
-                case "{token}":    body[k] = token
-                case "{cmd}":      body[k] = cmd.rawValue
-                case "{userId}":   body[k] = userId
-                case "{userName}": body[k] = userName
-                case "{ts}":       body[k] = Int(Date().timeIntervalSince1970)
-                case "{tsMs}":     body[k] = Int(Date().timeIntervalSince1970 * 1000)
-                default:           body[k] = s
-                }
-            } else {
-                body[k] = v
-            }
-        }
+        // 外层：{"MQTTStatisticsDataDTO":"<转义后的内层JSON字符串>"}
+        let outer: [String: Any] = ["MQTTStatisticsDataDTO": inner]
+        let outerData = try JSONSerialization.data(withJSONObject: outer)
+        let outerStr = String(data: outerData, encoding: .utf8) ?? "{}"
 
-        // 3. 按认证模式加工
-        var extraHeaders: [String: String] = [:]
-        switch Self.authMode {
-        case .plain:
-            break
-        case .bodySign(let secret):
-            body["sign"] = Self.sign(params: body, secret: secret)
-        case .headersSign(let headers):
-            extraHeaders = headers
-        }
+        var comp = URLComponents(string: "https://mp.ebanma.com" + controlPath)!
+        comp.queryItems = [URLQueryItem(name: "data", value: outerStr)]
 
-        // 4. 发请求
-        let url = URL(string: "https://mp.ebanma.com" + spec.path)!
-        var req = URLRequest(url: url)
-        req.httpMethod = spec.method
-        req.setValue("okhttp/4.9.3", forHTTPHeaderField: "User-Agent")
+        // 请求头（照抄 MG Live 实测形态）
+        var req = URLRequest(url: comp.url!)
+        req.httpMethod = "GET"
+        req.setValue("MGProject_PD/2.1.7 (iPhone; iOS 16.6; Scale/3.00)", forHTTPHeaderField: "User-Agent")
+        req.setValue("App", forHTTPHeaderField: "X-Client-Id")
+        req.setValue("mgapp", forHTTPHeaderField: "app-type")
+        req.setValue("2.1.7", forHTTPHeaderField: "versionCode")
+        req.setValue("MG", forHTTPHeaderField: "channelID")
+        req.setValue("iOS", forHTTPHeaderField: "os")
+        req.setValue("ios", forHTTPHeaderField: "watch-man-check-type")
+        req.setValue("T", forHTTPHeaderField: "watch-man-check-flag")
         req.setValue("*/*", forHTTPHeaderField: "Accept")
-        req.setValue(spec.contentType, forHTTPHeaderField: "Content-Type")
-        for (k, v) in extraHeaders { req.setValue(v, forHTTPHeaderField: k) }
+        req.setValue(token, forHTTPHeaderField: "token")
+        if !userId.isEmpty { req.setValue(userId, forHTTPHeaderField: "userid") }
+        req.setValue(String(now), forHTTPHeaderField: "timestamp")
 
-        if spec.method.uppercased() == "POST" {
-            if spec.contentType.contains("json") {
-                req.httpBody = try JSONSerialization.data(withJSONObject: body)
-            } else {
-                var comps = URLComponents()
-                comps.queryItems = body.map { URLQueryItem(name: $0.key,
-                                    value: "\($0.value)") }
-                req.httpBody = comps.query?.data(using: .utf8)
-            }
-        } else {
-            // GET：参数拼到 query
-            var comp = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-            comp.queryItems = body.map { URLQueryItem(name: $0.key, value: "\($0.value)") }
-            req.url = comp.url
-        }
-
-        // 5. 解析响应
         let data = try await send(req)
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw SAICError.decode("控车响应非 JSON")
@@ -322,26 +294,32 @@ actor SAICService {
             if code == "14101" { throw SAICError.tokenExpired }
             throw SAICError.api(code, msg)
         }
-        // 成功：返回服务端提示语（可能是「指令已下发」之类）
-        if let d = root["data"] as? [String: Any],
-           let m = d["msg"] as? String { return m }
-        return root["msg"] as? String ?? "指令已下发"
+        // 实测成功响应：{"req_id":"...","data":null}
+        return "指令已下发（\(Self.commandTypeText(cmd))）"
     }
 
-    /// 常见签名算法：参数按 key 升序拼 k=v&... 后接 secret，取 MD5
-    /// （抓到真实请求后核对：看排序方式与是否含空值）
-    private static func sign(params: [String: Any],
-                             secret: String) -> String {
-        let sorted = params.keys.sorted()
-        let joined = sorted.map { "\($0)=\(params[$0]!)" }.joined(separator: "&")
-        return md5(joined + secret)
+    /// 手工构造内层 JSON —— 必须保持字段顺序与实测一致
+    /// （服务端疑似按顺序解析，且需要正确的转义形态）
+    private static func buildInnerJSON(commandId: Int, ts7: Int, ts1: Int,
+                                       commandType: String, vin: String,
+                                       aliClientId: String) -> String {
+        // 注意：这是「字符串形式」的 JSON，稍后由外层序列化器自动转义
+        func esc(_ s: String) -> String {
+            return s.replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "\"", with: "\\\"")
+        }
+        return "{\"commandId\":\(commandId),"
+             + "\"timestamp7\":\(ts7),"
+             + "\"timestamp1\":\(ts1),"
+             + "\"commandType\":\"\(esc(commandType))\","
+             + "\"vin\":\"\(esc(vin))\","
+             + "\"aliClientId\":\"\(esc(aliClientId))\"}"
     }
 
-    private static func md5(_ s: String) -> String {
-        // 用系统 CryptoKit 会引入依赖，这里用 CommonCrypto
-        var digest = [UInt8](repeating: 0, count: 16)
-        let bytes = Array(s.utf8)
-        CC_MD5(bytes, CC_LONG(bytes.count), &digest)
-        return digest.map { String(format: "%02x", $0) }.joined()
+    /// commandId：实测为 2025 + 递增流水（202503679445 / 367794450）
+    /// 服务端仅作统计，非严格校验，此处生成一个合理值
+    private static func makeCommandId() -> Int {
+        let seq = Int(Date().timeIntervalSince1970 * 1000) % 1_000_000_000
+        return 2025 * 100_000_000 + seq % 100_000_000
     }
 }
