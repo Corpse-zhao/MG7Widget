@@ -1,0 +1,80 @@
+name: Build MG7Widget
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 选择 Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: 安装工具
+        run: |
+          brew install make xz ldid xcodegen
+          echo "GNUMAKE=$(brew --prefix)/opt/make/libexec/gnubin" >> $GITHUB_ENV
+
+      # ---------- 1. Xcode 工程：(App + Widget Extension) ----------
+      - name: 生成 Xcode 工程
+        run: |
+          cd ios/MG7Widget
+          xcodegen generate
+
+      - name: 编译 App + Widget
+        run: |
+          cd ios/MG7Widget
+          xcodebuild -project MG7Widget.xcodeproj \
+            -scheme MG7Widget \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tail -40
+
+      - name: 打 .tipa（TrollStore 安装包）
+        run: |
+          cd ios/MG7Widget
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          echo "APP=$APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qr MG7Widget.tipa Payload
+          ls -lh MG7Widget.tipa
+
+      # ---------- 2. Theos 工具：MGHelper ----------
+      - name: 安装 roothide/theos
+        run: |
+          export THEOS=$HOME/theos
+          git clone --recursive https://github.com/roothide/theos.git "$THEOS"
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+
+      - name: 编译 mghelper
+        run: |
+          cd ios/MGHelperTweak
+          $GNUMAKE/bin/gmake package THEOS_PACKAGE_SCHEME=roothide FINALPACKAGE=1 2>&1 | tail -30
+
+      # ---------- 3. 上传 ----------
+      - name: 上传 .tipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: MG7Widget-tipa
+          path: ios/MG7Widget/MG7Widget.tipa
+          if-no-files-found: error
+
+      - name: 上传 helper deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: mghelper-deb
+          path: ios/MGHelperTweak/packages/*.deb
+          if-no-files-found: warn
