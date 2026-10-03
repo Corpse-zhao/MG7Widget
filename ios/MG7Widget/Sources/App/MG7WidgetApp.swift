@@ -29,6 +29,6 @@ struct MG7WidgetApp: App {
 
 /// 版本号（与 control / 页脚保持同步）
 enum AppInfo {
-    static let version = "0.3.7"
+    static let version = "0.3.8"
     static let author  = "板栗仁"
 }
