@@ -21,6 +21,7 @@ targets:
     platform: iOS
     sources:
       - path: Sources/App
+      - path: Sources/Shared
       - path: Sources/Models
       - path: Sources/Services
       - path: Sources/Views
@@ -30,8 +31,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.banliren.mg7widget
         INFOPLIST_FILE: Resources/App-Info.plist
-        MARKETING_VERSION: "0.2.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.2.1"
+        CURRENT_PROJECT_VERSION: "2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     dependencies:
@@ -45,6 +46,7 @@ targets:
     platform: iOS
     sources:
       - path: Sources/Widget
+      - path: Sources/Shared
       - path: Sources/Models
       - path: Sources/Services
       - path: Resources/Assets.xcassets
@@ -53,8 +55,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.banliren.mg7widget.widget
         INFOPLIST_FILE: Resources/Widget-Info.plist
-        MARKETING_VERSION: "0.2.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.2.1"
+        CURRENT_PROJECT_VERSION: "2"
         SKIP_INSTALL: "YES"
         APPLICATION_EXTENSION_API_ONLY: "YES"
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor

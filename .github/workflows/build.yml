@@ -20,7 +20,7 @@ jobs:
       - name: 安装工具
         run: |
           brew install make xz ldid xcodegen
-          echo "GNUMAKE=$(brew --prefix)/opt/make/libexec/gnubin" >> $GITHUB_ENV
+          echo "$(brew --prefix)/opt/make/libexec/gnubin" >> $GITHUB_PATH
 
       # ---------- 1. Xcode 工程：(App + Widget Extension) ----------
       - name: 生成 Xcode 工程
@@ -30,6 +30,7 @@ jobs:
 
       - name: 编译 App + Widget
         run: |
+          set -o pipefail
           cd ios/MG7Widget
           xcodebuild -project MG7Widget.xcodeproj \
             -scheme MG7Widget \
@@ -46,11 +47,15 @@ jobs:
         run: |
           cd ios/MG7Widget
           APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          if [ -z "$APP" ]; then echo "::error::未找到编译产物 .app"; exit 1; fi
           echo "APP=$APP"
+          du -sh "$APP"
+          rm -rf Payload
           mkdir -p Payload
           cp -R "$APP" Payload/
           zip -qr MG7Widget.tipa Payload
           ls -lh MG7Widget.tipa
+          test $(stat -f%z MG7Widget.tipa) -gt 100000 || { echo "::error::tipa 过小，打包异常"; exit 1; }
 
       # ---------- 2. Theos 工具：MGHelper ----------
       - name: 安装 roothide/theos
@@ -61,8 +66,10 @@ jobs:
 
       - name: 编译 mghelper
         run: |
+          set -o pipefail
           cd ios/MGHelperTweak
-          $GNUMAKE/bin/gmake package THEOS_PACKAGE_SCHEME=roothide FINALPACKAGE=1 2>&1 | tail -30
+          gmake package THEOS_PACKAGE_SCHEME=roothide FINALPACKAGE=1 2>&1 | tail -30
+          ls -lh packages/
 
       # ---------- 3. 上传 ----------
       - name: 上传 .tipa
