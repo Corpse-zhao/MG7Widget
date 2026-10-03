@@ -339,11 +339,8 @@ struct ContentView: View {
     }
 
     private var footer: some View {
+        // 错误已由页首 errorBanner 醒目展示，这里只留版本信息，避免重复
         VStack(spacing: 4) {
-            if let e = vm.errorMessage {
-                Text(e).font(.system(size: 11)).foregroundColor(MGTheme.danger)
-                    .multilineTextAlignment(.center)
-            }
             Text("MG7 车况 v\(AppInfo.version) · \(AppInfo.author)")
                 .font(.system(size: 10)).foregroundColor(MGTheme.textSecondary)
         }

@@ -51,6 +51,9 @@ final class CarViewModel: ObservableObject {
             errorMessage = "请先在设置中填写 token 与 VIN"
             return
         }
+        // 并发去重：前台自动刷新与手动下拉撞车时，后来者直接复用结果，
+        // 避免旧任务被取消而抛出「已取消」
+        if isLoading { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -63,12 +66,20 @@ final class CarViewModel: ObservableObject {
             updateRefreshText()
             // 通知小组件刷新
             WidgetCenter.shared.reloadAllTimelines()
+        } catch is CancellationError {
+            // 下拉刷新被快速滚动打断 / 前台自动刷新与手动刷新撞车
+            // → 任务取消是正常现象，不提示用户
+        } catch let e as URLError where e.code == .cancelled {
+            // URLSession 层的取消（-999），同样静默
         } catch let e as SAICError {
             errorMessage = e.errorDescription
             if case .tokenExpired = e {
                 errorMessage = "token 已失效。请打开一次 MG Live 刷新车况，然后回这里重新获取 token。"
             }
         } catch {
+            let ns = error as NSError
+            // 双保险：兜住所有形态的取消错误
+            if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
             errorMessage = error.localizedDescription
         }
     }
