@@ -64,20 +64,14 @@ struct MG7WidgetView: View {
     let entry: MG7Entry
 
     var body: some View {
-        // ⚠️ 关键：iOS 17+ WidgetKit 要求显式提供 containerBackground。
-        // 缺失时系统会用深色/材质底 → 配深色文字看起来「全黑」。
-        // 目标系统是 iOS 16.6，故用 if #available 做可用性分支。
-        Group {
-            if #available(iOS 17.0, *) {
-                content
-                    .containerBackground(for: .widget) { widgetBackground }
-            } else {
-                content
-                    .background(widgetBackground)
-            }
+        // ⚠️ 背景必须直接贴在最外层 ZStack 上，不要用 Group + if/else 包裹
+        //（Group 内的分支会让外层 modifier 作用层级不可靠 → 背景丢失 → 全黑）
+        ZStack {
+            widgetBackground          // 永远铺满的浅色底（最底层）
+            content
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .environment(\.colorScheme, .light)   // 强制浅色，深色模式下也保持可读
+        .containerBackgroundCompat(widgetBackground)
     }
 
     private var widgetBackground: some View {
@@ -92,6 +86,19 @@ struct MG7WidgetView: View {
         case .systemSmall:  SmallWidget(entry: entry)
         case .systemMedium: MediumWidget(entry: entry)
         default:            LargeWidget(entry: entry)
+        }
+    }
+}
+
+// MARK: - iOS 17 containerBackground 兼容封装
+
+private extension View {
+    @ViewBuilder
+    func containerBackgroundCompat<V: View>(_ bg: V) -> some View {
+        if #available(iOS 17.0, *) {
+            self.containerBackground(for: .widget) { bg }
+        } else {
+            self.background(bg)   // iOS 16：显式背景（本机走这条）
         }
     }
 }
@@ -190,11 +197,11 @@ struct MediumWidget: View {
     }
 
     private func metric(_ t: String, _ v: String, _ u: String, accent: Color) -> some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 1) {
             Text(t).font(.system(size: 10)).foregroundColor(MGTheme.textSecondary)
             HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(v).font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundColor(accent).minimumScaleFactor(0.7)
+                Text(v).font(.system(size: 19, weight: .bold, design: .rounded))
+                    .foregroundColor(accent).minimumScaleFactor(0.6).lineLimit(1)
                 Text(u).font(.system(size: 9)).foregroundColor(MGTheme.textSecondary)
             }
         }
@@ -233,13 +240,20 @@ struct LargeWidget: View {
     let entry: MG7Entry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // ⚠️ systemLarge 高度有限，内容过多会被压缩到渲染失败（表现为整块黑）。
+        // 策略：紧凑间距 + minimumScaleFactor + 不用会抢空间的 Spacer + 全部可省略。
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(entry.carName).font(.system(size: 15, weight: .bold))
-                    .foregroundColor(MGTheme.orange)
-                Spacer()
-                Text(vinText).font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(MGTheme.textSecondary)
+                Text(entry.carName).font(.system(size: 14, weight: .bold))
+                    .foregroundColor(MGTheme.orange).lineLimit(1)
+                Spacer(minLength: 4)
+                if entry.snapshot == nil {
+                    Text("待刷新").font(.system(size: 9))
+                        .foregroundColor(MGTheme.orange)
+                } else {
+                    Text(vinText).font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(MGTheme.textSecondary)
+                }
             }
 
             HStack(spacing: 8) {
@@ -249,8 +263,8 @@ struct LargeWidget: View {
             }
 
             // 胎压
-            VStack(alignment: .leading, spacing: 6) {
-                Text("胎压 kPa").font(.system(size: 10)).foregroundColor(MGTheme.textSecondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("胎压 kPa").font(.system(size: 9)).foregroundColor(MGTheme.textSecondary)
                 HStack(spacing: 0) {
                     tyre("左前", entry.snapshot?.tyreFrontLeft)
                     tyre("右前", entry.snapshot?.tyreFrontRight)
@@ -267,74 +281,65 @@ struct LargeWidget: View {
             }
 
             // 状态
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 chip("已锁", entry.snapshot?.isLocked ?? false, success: true)
                 chip("门窗关", !(entry.snapshot?.doorOpen ?? false) && !(entry.snapshot?.windowOpen ?? false), success: true)
                 chip("空调", entry.snapshot?.climateOn ?? false, success: false)
-                Spacer()
-            }
-
-            if entry.snapshot == nil {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 10))
-                        .foregroundColor(MGTheme.orange)
-                    Text("打开 App 刷新一次即出数据")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(MGTheme.orange)
-                }
+                Spacer(minLength: 0)
             }
 
             if let addr = entry.snapshot?.address, !addr.isEmpty {
                 HStack(spacing: 4) {
-                    Image(systemName: "mappin.circle.fill").font(.system(size: 11))
+                    Image(systemName: "mappin.circle.fill").font(.system(size: 10))
                         .foregroundColor(MGTheme.orange)
-                    Text(addr).font(.system(size: 11))
-                        .foregroundColor(MGTheme.textSecondary).lineLimit(1)
+                    Text(addr).font(.system(size: 10))
+                        .foregroundColor(MGTheme.textSecondary)
+                        .lineLimit(1).minimumScaleFactor(0.8)
                 }
             }
-            Spacer(minLength: 0)
         }
-        .padding(16)
+        .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(MGTheme.widgetBg)
     }
 
     private func bigMetric(_ t: String, _ v: String, _ u: String, _ c: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(t).font(.system(size: 11)).foregroundColor(MGTheme.textSecondary)
+        VStack(alignment: .leading, spacing: 1) {
+            Text(t).font(.system(size: 10)).foregroundColor(MGTheme.textSecondary)
             HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(v).font(.system(size: 32, weight: .bold, design: .rounded))
-                    .foregroundColor(c)
-                Text(u).font(.system(size: 12)).foregroundColor(MGTheme.textSecondary)
+                Text(v).font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundColor(c).minimumScaleFactor(0.6).lineLimit(1)
+                Text(u).font(.system(size: 11)).foregroundColor(MGTheme.textSecondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(.horizontal, 10).padding(.vertical, 8)
         .background(MGTheme.orangeBg)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private func tyre(_ l: String, _ v: Double?) -> some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 1) {
             Text(l).font(.system(size: 9)).foregroundColor(MGTheme.textSecondary)
             Text(v.map { String(Int($0)) } ?? "—")
-                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .font(.system(size: 14, weight: .bold, design: .rounded))
                 .foregroundColor((v ?? 999) < 220 ? MGTheme.danger : MGTheme.tyreBlue)
+                .minimumScaleFactor(0.7).lineLimit(1)
         }
         .frame(maxWidth: .infinity)
     }
 
     private func smallMetric(_ t: String, _ v: String) -> some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 1) {
             Text(t).font(.system(size: 9)).foregroundColor(MGTheme.textSecondary)
-            Text(v).font(.system(size: 13, weight: .semibold))
-                .foregroundColor(MGTheme.textPrimary).minimumScaleFactor(0.7)
+            Text(v).font(.system(size: 12, weight: .semibold))
+                .foregroundColor(MGTheme.textPrimary)
+                .minimumScaleFactor(0.6).lineLimit(1)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 7)
+        .padding(.vertical, 6)
         .background(MGTheme.cardBg)
-        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func chip(_ t: String, _ on: Bool, success: Bool) -> some View {
