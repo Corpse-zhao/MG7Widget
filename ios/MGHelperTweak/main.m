@@ -97,7 +97,31 @@ static int refreshToken(BOOL diag) {
         NSLog(@"[MGHelper] ----------------------------");
     }
 
+    // ---- 快路径：先挑出疑似 MG Live 的容器，优先只扫它们 ----
+    // 不解任何文件内容，只读 metadata plist，毫秒级完成
+    NSMutableArray<NSString *> *priority = [NSMutableArray array];
+    NSMutableArray<NSString *> *others   = [NSMutableArray array];
     for (NSString *u in uuids) {
+        NSString *c = [base stringByAppendingPathComponent:u];
+        NSString *bid = metaBundleID(c) ?: @"";
+        NSString *low = bid.lowercaseString;
+        // 命中任一特征词即视为疑似 MG Live
+        BOOL hit = [low containsString:@"saic"] || [low containsString:@"mglive"]
+                || [low containsString:@"mg-live"] || [low containsString:@"ebanma"]
+                || ([low containsString:@"mg"] && [low containsString:@"live"]);
+        if (hit) {
+            [priority addObject:u];
+            NSLog(@"[MGHelper] ★ 优先扫描疑似容器: %@ -> %@", u, bid);
+        } else {
+            [others addObject:u];
+        }
+    }
+    NSLog(@"[MGHelper] 疑似 MG Live 容器 %lu 个，其余 %lu 个",
+          (unsigned long)priority.count, (unsigned long)others.count);
+
+    // 先扫疑似容器（通常 1 个，秒出结果）
+    NSArray *order = [priority arrayByAddingObjectsFromArray:others];
+    for (NSString *u in order) {
         @autoreleasepool {
             NSString *container = [base stringByAppendingPathComponent:u];
             g_scannedContainers++;
@@ -124,6 +148,11 @@ static int refreshToken(BOOL diag) {
                 NSLog(@"[MGHelper]   尾部:   ...%@",
                       [token substringFromIndex:token.length - 16]);
                 return 0;
+            }
+            // 每扫完一个疑似容器就报进度，避免用户以为卡死
+            if (g_scannedContainers % 20 == 0) {
+                NSLog(@"[MGHelper] 进度 %d/%lu 容器, %d 文件...",
+                      g_scannedContainers, (unsigned long)order.count, g_scannedFiles);
             }
         }
     }
