@@ -138,6 +138,18 @@ actor SAICService {
         return Self.map(d, vin: vin)
     }
 
+    /// 电压归一化：服务端不同接口版本量纲不一（×10 或 ×100），取落在 8~18V 的候选
+    private static func normalizeVoltage(_ v: Double) -> Double {
+        let candidates = [v / 100.0, v / 10.0, v]
+        return candidates.first { (8.0...18.0).contains($0) } ?? (v / 10.0)
+    }
+
+    /// 百分比归一化：同理，取落在 0~100% 的候选
+    private static func normalizePercent(_ v: Double) -> Double {
+        let candidates = [v / 100.0, v / 10.0, v]
+        return candidates.first { (0.0...100.0).contains($0) } ?? (v / 10.0)
+    }
+
     // MARK: - 字段映射（已用真实响应核实）
 
     private static func map(_ d: [String: Any], vin: String) -> VehicleSnapshot {
@@ -170,9 +182,10 @@ actor SAICService {
         s.tyreRearLeft   = num(val, "rear_left_tyre_pressure")
         s.tyreRearRight  = num(val, "rear_right_tyre_pressure")
 
-        // 电瓶：原值 ÷10（实测 119 → 11.9V，prc 700 → 70.0%）
-        s.battery12V        = num(val, "vehicle_battery").map { $0 / 10.0 }
-        s.battery12Percent  = num(val, "vehicle_battery_prc").map { $0 / 10.0 }
+        // 电瓶：服务端量纲不统一（vp/1.1 实测 119=11.9V ÷10；vp/1.2 实测 1210=12.1V ÷100）
+        // → 智能归一化：取落在合理电压区间 8~18V 的候选值
+        s.battery12V = num(val, "vehicle_battery").map { Self.normalizeVoltage($0) }
+        s.battery12Percent = num(val, "vehicle_battery_prc").map { Self.normalizePercent($0) }
 
         s.doorOpen      = bool(st, "door")
         s.windowOpen    = bool(st, "window")
