@@ -281,7 +281,10 @@ actor SAICService {
         var comp = URLComponents(string: "https://mp.ebanma.com" + controlPath)!
         comp.queryItems = [URLQueryItem(name: "data", value: outerStr)]
 
-        // 请求头（照抄 MG Live 实测形态）
+        // 请求头 —— v0.4.1 起与 MG Live 实测控车请求 100% 对齐（sign 除外）。
+        // 2026-10-04 抓包对照发现：我们此前缺 Uuid/Model/brandCode/Accept-Language/
+        // osVersion/watch-man-mobile/watch-man-token，且 timestamp 头应为秒级取整。
+        // 服务端可能按「指纹完整度」决定是否真下发指令（受理≠执行）。
         var req = URLRequest(url: comp.url!)
         req.httpMethod = "GET"
         req.setValue("MGProject_PD/2.1.7 (iPhone; iOS 16.6; Scale/3.00)", forHTTPHeaderField: "User-Agent")
@@ -290,12 +293,25 @@ actor SAICService {
         req.setValue("2.1.7", forHTTPHeaderField: "versionCode")
         req.setValue("MG", forHTTPHeaderField: "channelID")
         req.setValue("iOS", forHTTPHeaderField: "os")
-        req.setValue("ios", forHTTPHeaderField: "watch-man-check-type")
+        req.setValue("IOS", forHTTPHeaderField: "watch-man-check-type")
         req.setValue("T", forHTTPHeaderField: "watch-man-check-flag")
+        req.setValue("", forHTTPHeaderField: "watch-man-mobile")
+        req.setValue("", forHTTPHeaderField: "watch-man-token")
+        req.setValue("ehs", forHTTPHeaderField: "Model")          // MG7 车型代号（抓包实测）
+        req.setValue("2", forHTTPHeaderField: "brandCode")
+        req.setValue("zh-cn", forHTTPHeaderField: "Accept-Language")
+        req.setValue("gzip, deflate, br", forHTTPHeaderField: "Accept-Encoding")
+        req.setValue("16.6", forHTTPHeaderField: "osVersion")
+        // Uuid 头 = aliClientId 的 @@@ 后段（GID_ios_mg@@@UUID → UUID，实测一致）
+        if let uuidPart = aliClientId.split(separator: "@@@").last.map(String.init),
+           !uuidPart.isEmpty {
+            req.setValue(uuidPart, forHTTPHeaderField: "Uuid")
+        }
         req.setValue("*/*", forHTTPHeaderField: "Accept")
         req.setValue(token, forHTTPHeaderField: "token")
         if !userId.isEmpty { req.setValue(userId, forHTTPHeaderField: "userid") }
-        req.setValue(String(now), forHTTPHeaderField: "timestamp")
+        // timestamp 头：MG Live 实测为毫秒向下取整到秒（1791797986800 → 1791797986000）
+        req.setValue(String(now / 1000 * 1000), forHTTPHeaderField: "timestamp")
 
         let data = try await send(req)
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
