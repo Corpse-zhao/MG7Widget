@@ -225,9 +225,35 @@ enum MG7Store {
         var coordFixV3: Bool = false
         /// 控车用的阿里云 MQTT 设备 ID（从 MG Live 抓包 mqttpublish 请求取，留空用内置默认）
         var aliClientId: String = ""
+        /// 是否在主界面显示控车面板（v0.4.4 起默认隐藏；控车未验证通过，用户要求可删）
+        var showControl: Bool = false
 
         var isValid: Bool {
             !accessToken.isEmpty && vin.count == 17
+        }
+
+        // ⚠️ v0.4.4 关键修复：自定义容错解码。
+        // synthesized Codable 遇到旧版本数据缺新字段时会**整条抛 DecodingError**，
+        // 导致所有存储通道解码全失败 → loadConfig 返回空配置 → token 全丢、每次升级都要重填！
+        // （v0.4.2 加 amapKey、v0.4.3 加 coordFixV3 时都踩过）
+        // 全字段 decodeIfPresent + 默认值后，新版本永远能读旧数据。
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            accessToken   = try c.decodeIfPresent(String.self, forKey: .accessToken) ?? ""
+            vin           = try c.decodeIfPresent(String.self, forKey: .vin) ?? ""
+            userId        = try c.decodeIfPresent(String.self, forKey: .userId) ?? ""
+            carName       = try c.decodeIfPresent(String.self, forKey: .carName) ?? "我的 MG7"
+            plateNumber   = try c.decodeIfPresent(String.self, forKey: .plateNumber) ?? ""
+            fuelCapacity  = try c.decodeIfPresent(Double.self, forKey: .fuelCapacity) ?? 65.0
+            autoRefresh   = try c.decodeIfPresent(Bool.self, forKey: .autoRefresh) ?? true
+            lastTokenSync = try c.decodeIfPresent(Date.self, forKey: .lastTokenSync) ?? .distantPast
+            amapKey       = try c.decodeIfPresent(String.self, forKey: .amapKey) ?? ""
+            coordsAreGCJ02 = try c.decodeIfPresent(Bool.self, forKey: .coordsAreGCJ02) ?? false
+            coordFixV3    = try c.decodeIfPresent(Bool.self, forKey: .coordFixV3) ?? false
+            aliClientId   = try c.decodeIfPresent(String.self, forKey: .aliClientId) ?? ""
+            showControl   = try c.decodeIfPresent(Bool.self, forKey: .showControl) ?? false
         }
     }
 

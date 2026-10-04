@@ -26,7 +26,6 @@ struct ContentView: View {
                     } else {
                         emptyState
                     }
-                    ControlPanel(vm: vm)
                     footer
                 }
                 .padding(.horizontal, 16)

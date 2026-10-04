@@ -4,14 +4,22 @@
 //
 //  位置服务：经纬度 → 中文地址
 //
-//  精度策略（2026-10-03 修订）：
+//  精度策略（2026-10-04 修订）：
 //   1. 优先高德 Web 服务逆地理（最高精度，国内路名/门牌准确）——需用户在设置里填 key
 //   2. 没有 key 时回退 iOS 原生 CLGeocoder（免费，但国内只到 POI/街道级，易串到隔壁）
 //   3. 两者都失败则至少把原始经纬度保留给用户（可直达导航）
 //
-//  坐标系说明：SAIC 返回的是 WGS-84（GPS 原始值）。
-//   高德 Web API 默认吃 GCJ-02，故请求时带 coordsys=wgs84 让它自行转换。
-//   Apple 地图在中国大陆会自动做 WGS-84 → GCJ-02 纠偏，所以导航 URL 直接用原值即可。
+//  坐标系结论（2026-10-04 实测定案）：
+//   ⚠️ SAIC 后台返回 **WGS-84（GPS 原始值）**，不是 GCJ-02！
+//   依据：官方 App「盈丰中路35号」vs 我们 v0.4.2「南洲北路751号」相差 1256m
+//   ≈ 2×广州典型 GCJ 偏移(623m)——把 WGS 再转一次 WGS 必然产生双重偏移。
+//
+//   高德 regeo 的输入必须是 GCJ-02。官方文档参数表**没有 coordsys 字段**
+//  （第三方实测只认 gps/mapbar/baidu，传 wgs84 会被静默忽略）——
+//   v0.4.3 之前我们传 "coordsys=wgs84" 一直无效，地址长期偏 600m 的根因。
+//   v0.4.4 起改为：**客户端用 CoordTransform.wgs2gcj 预转换后再传**，不依赖该参数。
+//
+//   Apple 地图在大陆会自动做 WGS→GCJ 纠偏，所以地图/导航 URL 直接用原值。
 //
 
 import Foundation
@@ -32,8 +40,8 @@ actor LocationService {
         cache.removeAll()   // key 变了，缓存作废
     }
 
-    /// 车辆坐标是否为 GCJ-02（默认是，见 CoordTransform.swift 头注释）
-    private var coordsAreGCJ02: Bool = true
+    /// 车辆坐标是否为 GCJ-02（实测默认 **否**：SAIC 返回 WGS-84）
+    private var coordsAreGCJ02: Bool = false
     func setCoordsAreGCJ02(_ v: Bool) {
         coordsAreGCJ02 = v
         cache.removeAll()
@@ -43,23 +51,26 @@ actor LocationService {
     private(set) var lastSource: String = ""
 
     /// 经纬度 → 中文地址
-    /// 入参约定：SAIC 原始坐标（GCJ-02，若开关开）。
-    /// 内部会先转 WGS-84 再喂给系统服务（系统内部会再纠偏回 GCJ，正好抵消）。
+    /// 入参约定：SAIC 原始坐标（实测 WGS-84；若用户开关说 GCJ 则按 GCJ 处理）
     func reverseGeocode(lat: Double?, lon: Double?) async -> String? {
         guard let lat = lat, let lon = lon, lat != 0, lon != 0 else { return nil }
         let key = String(format: "%.5f,%.5f", lat, lon) + (coordsAreGCJ02 ? "|g" : "|w")
         if let hit = cache[key] { return hit }
 
-        // 若车辆坐标是 GCJ-02，先转 WGS-84（系统服务期望 WGS 输入）
+        // WGS 视角坐标（CLGeocoder 期望 WGS 输入，系统内部会纠偏回 GCJ 查询）
         let (wLat, wLon) = coordsAreGCJ02
             ? CoordTransform.gcj2wgs(lat: lat, lon: lon)
             : (lat, lon)
 
-        // 1) 高德（高精度）。注意：高德吃 GCJ-02 ——
-        //    坐标本来就是 GCJ 就直接传；是 WGS 就带 coordsys=wgs84 让它转
+        // 1) 高德（高精度）。高德吃 GCJ-02 —— 客户端先把坐标统一转成 GCJ 再传。
+        //    ⚠️ v0.4.4：不再依赖 regeo 的 coordsys 参数！官方文档参数表里根本没有
+        //    coordsys 字段（第三方实测只认 gps/mapbar/baidu），传 wgs84 会被静默
+        //    忽略 → WGS 被当 GCJ 解析 → 地址偏 600m（「又回去了」的根因）
         if !amapKey.isEmpty {
-            let (aLat, aLon) = coordsAreGCJ02 ? (lat, lon) : (wLat, wLon)
-            if let addr = await amap(lat: aLat, lon: aLon, inputIsWGS: !coordsAreGCJ02) {
+            let g = coordsAreGCJ02
+                ? (lat: lat, lon: lon)
+                : CoordTransform.wgs2gcj(lat: lat, lon: lon)
+            if let addr = await amap(lat: g.lat, lon: g.lon) {
                 cache[key] = addr; lastSource = "高德"
                 return addr
             }
@@ -76,13 +87,12 @@ actor LocationService {
 
     // MARK: - 高德 Web 服务逆地理
 
-    private func amap(lat: Double, lon: Double, inputIsWGS: Bool) async -> String? {
-        // inputIsWGS 时带 coordsys=wgs84 让高德转换；输入已是 GCJ 则不带
-        var urlStr = "https://restapi.amap.com/v3/geocode/regeo"
+    /// 入参必须是 GCJ-02（调用方已保证），不再传 coordsys（官方不认 wgs84）
+    private func amap(lat: Double, lon: Double) async -> String? {
+        let urlStr = "https://restapi.amap.com/v3/geocode/regeo"
             + "?key=\(amapKey)"
             + "&location=\(String(format: "%.6f,%.6f", lon, lat))"
-        if inputIsWGS { urlStr += "&coordsys=wgs84" }
-        urlStr += "&extensions=base&output=JSON"
+            + "&extensions=base&output=JSON"
         guard let url = URL(string: urlStr) else { return nil }
 
         do {

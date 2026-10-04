@@ -13,12 +13,10 @@ struct SettingsView: View {
 
     @State private var token = ""
     @State private var vin = ""
-    @State private var userId = ""
     @State private var carName = ""
     @State private var plate = ""
     @State private var amapKey = ""
     @State private var coordsGCJ = true
-    @State private var aliClientId = ""
 
     var body: some View {
         NavigationView {
@@ -39,17 +37,8 @@ struct SettingsView: View {
                         .font(.system(size: 12, design: .monospaced))
                         .autocapitalization(.allCharacters)
                         .disableAutocorrection(true)
-                    TextField("user_id（可选，控车用）", text: $userId)
-                        .font(.system(size: 12, design: .monospaced))
-                        .keyboardType(.numberPad)
-                    TextField("aliClientId（控车用，见下方说明）", text: $aliClientId)
-                        .font(.system(size: 12, design: .monospaced))
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
                 } header: {
-                    Text("车辆信息 / 控车参数")
-                } footer: {
-                    Text("aliClientId：抓包 MG Live 点一次锁车/解锁，找 mp.ebanma.com/app-mp/mqttpublish 请求，URL 里 data 参数解码后的 aliClientId 字段（形如 GID_ios_mg@@@XXXX）。填你自己手机上抓到的，指令才能推到你车机。")
+                    Text("车辆信息")
                 }
 
                 Section {
@@ -80,13 +69,12 @@ struct SettingsView: View {
 
                 Section {
                     Button {
-                        vm.saveToken(token, vin: vin, userId: userId)
+                        vm.saveToken(token, vin: vin, userId: vm.config.userId)
                         var c = vm.config
                         c.carName = carName.isEmpty ? "我的 MG7" : carName
                         c.plateNumber = plate
                         c.amapKey = amapKey.trimmingCharacters(in: .whitespacesAndNewlines)
                         c.coordsAreGCJ02 = coordsGCJ
-                        c.aliClientId = aliClientId.trimmingCharacters(in: .whitespacesAndNewlines)
                         vm.updateConfig(c)
                         dismiss()
                     } label: {
@@ -145,12 +133,10 @@ struct SettingsView: View {
             .onAppear {
                 token = vm.config.accessToken
                 vin = vm.config.vin
-                userId = vm.config.userId
                 carName = vm.config.carName
                 plate = vm.config.plateNumber
                 amapKey = vm.config.amapKey
                 coordsGCJ = vm.config.coordsAreGCJ02
-                aliClientId = vm.config.aliClientId
             }
         }
     }
