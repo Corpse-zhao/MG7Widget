@@ -21,13 +21,8 @@ jobs:
         run: |
           brew install make xz ldid xcodegen
           echo "$(brew --prefix)/opt/make/libexec/gnubin" >> $GITHUB_PATH
-          # v0.4.10: Homebrew saurik 版 ldid 2.1.5_1 的 -S<file> 嵌 entitlements 静默失败
-          # (v0.4.8/v0.4.9 CI 守门两次实锤; 本地复现: 同输入同语法 procursus 版嵌入成功)
-          # → 覆盖为 Procursus 构建 (TrollStore/theos 生态标配)
-          curl -sL --retry 5 --retry-delay 2 --retry-all-errors -o /opt/homebrew/bin/ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_arm64
-          test $(stat -f%z /opt/homebrew/bin/ldid) -gt 100000 || { echo "::error::procursus ldid 下载异常(过小)"; exit 1; }
-          chmod +x /opt/homebrew/bin/ldid
-          echo "ldid replaced: $(which ldid)"
+          # v0.4.12: 删除外链下载 procursus ldid（run#31 curl exit 56 / run#32 卡24min 实锤不稳）
+          # entitlements 嵌入改用 runner 原生 codesign（见打包段）；brew ldid 仅保留供守门读回与 theos 使用
 
       # ---------- 1. Xcode 工程：(App + Widget Extension) ----------
       - name: 生成 Xcode 工程
@@ -70,12 +65,15 @@ jobs:
           EXTDIR=$(find "$APPDIR/PlugIns" -maxdepth 1 -name '*.appex' | head -1)
           EXTBIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$EXTDIR/Info.plist")
           echo "ldid in use: $(which ldid)"
-          ldid -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/App.entitlements" "$APPDIR/$APPBIN"
-          ldid -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/Widget.entitlements" "$EXTDIR/$EXTBIN"
+          # v0.4.12: 弃 ldid -S 嵌入(run#30实锤saurik版静默失败; run#31/32实锤外链下载不稳)
+          # 改用 macOS 原生 codesign ad-hoc 签名(identity -)嵌 entitlements —— 零外部下载依赖
+          # 标准 Apple CS blob，TrollStore 安装时读取并保留（TS 官方支持 ad-hoc ipa）
+          codesign --force --sign - --entitlements "$GITHUB_WORKSPACE/ios/MG7Widget/Resources/App.entitlements" "$APPDIR/$APPBIN"
+          codesign --force --sign - --entitlements "$GITHUB_WORKSPACE/ios/MG7Widget/Resources/Widget.entitlements" "$EXTDIR/$EXTBIN"
           echo "ldid 嵌入 entitlements: $APPDIR/$APPBIN + PlugIns/$(basename "$EXTDIR")/$EXTBIN"
           # v0.4.8 CI 内守门：ldid -S 退出 0 ≠ entitlements 真嵌入（连 application-groups key 都扫不到实锤过）。
           # ldid -e 读回 entitlements 明文，关键 key 必须 FOUND，否则 fail run 不出包。
-          ldid -e "$APPDIR/$APPBIN" | grep -q no-sandbox || { echo "::error::主App no-sandbox 未嵌入(ldid -S静默失败?)"; exit 1; }
+          ldid -e "$APPDIR/$APPBIN" | grep -q no-sandbox || { echo "::error::主App no-sandbox 未嵌入"; exit 1; }
           ldid -e "$EXTDIR/$EXTBIN" | grep -q application-groups || { echo "::error::小组件 App Group 未嵌入"; exit 1; }
           echo "entitlements 验证通过: 主App no-sandbox + 小组件 application-groups 均嵌入"
           zip -qr MG7Widget.tipa Payload
