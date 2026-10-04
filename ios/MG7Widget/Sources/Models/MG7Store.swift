@@ -99,7 +99,7 @@ enum MG7Store {
         let fm = FileManager.default
         try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
         let uid = mobileUID
-        try? fm.setAttributes([.ownerAccountID: uid, .groupAccountID: uid],
+        try? fm.setAttributes([.ownerAccountID: uid, .groupOwnerAccountID: uid],
                               ofItemAtPath: path)
     }
 
