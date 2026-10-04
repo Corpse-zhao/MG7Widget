@@ -53,6 +53,18 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP" Payload/
+          # v0.4.7 关键修复：显式嵌入 entitlements。
+          # CODE_SIGNING_ALLOWED=NO 构建出的二进制没有签名 blob（entitlements 根本没嵌），
+          # TrollStore 重签时用默认 entitlements（无 no-sandbox）→ App 带沙盒跑 →
+          # 扫不了小组件的 PluginKitExtension 容器 → v0.4.3~0.4.6「❌ 目录不可达(沙盒?)」根因。
+          # ldid 嵌入的 entitlements 是 XML 明文，TrollStore 安装时会保留并 platformize。
+          APPDIR="Payload/$(basename "$APP")"
+          APPBIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APPDIR/Info.plist")
+          EXTDIR=$(find "$APPDIR/PlugIns" -maxdepth 1 -name '*.appex' | head -1)
+          EXTBIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$EXTDIR/Info.plist")
+          ldid -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/App.entitlements" "$APPDIR/$APPBIN"
+          ldid -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/Widget.entitlements" "$EXTDIR/$EXTBIN"
+          echo "ldid 嵌入 entitlements: $APPDIR/$APPBIN + PlugIns/$(basename "$EXTDIR")/$EXTBIN"
           zip -qr MG7Widget.tipa Payload
           ls -lh MG7Widget.tipa
           test $(stat -f%z MG7Widget.tipa) -gt 100000 || { echo "::error::tipa 过小，打包异常"; exit 1; }
