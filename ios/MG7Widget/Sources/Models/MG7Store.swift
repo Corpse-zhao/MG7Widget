@@ -44,6 +44,118 @@ enum MG7Store {
         UserDefaults(suiteName: appGroupID)
     }
 
+    // MARK: - 小组件沙盒注入通道（v0.4.2，App Group 未分配时的实际通道）
+    //
+    //  背景（2026-10-04 用户截图实锤）：TrollStore/roothide 下系统不给本签名
+    //  分配 App Group 容器（containerURL 返回 nil）→ 官方跨进程通道全灭。
+    //  但宿主 App 是 root，可以反向把数据写进 **小组件 extension 自己的数据容器**
+    //  （/var/mobile/Containers/Data/PluginKitExtension/<UUID>/Library/MG7Share/）。
+    //  extension 读自己的容器永远放行，无需任何 entitlement。
+
+    /// 小组件 extension 的 bundle id（容器元数据里按它匹配）
+    static let widgetBundleID = "com.banliren.mg7widget.widget"
+
+    /// 当前进程是否为小组件 extension（appex 结尾）
+    static var isExtension: Bool {
+        Bundle.main.bundlePath.hasSuffix(".appex")
+    }
+
+    private static var cachedWidgetContainer: URL?
+
+    /// 定位小组件的数据容器：扫 PluginKitExtension 容器元数据。
+    /// 用「描述串包含 bundle id」来匹配，不依赖元数据 plist 的具体 key 名。
+    static func widgetContainerURL() -> URL? {
+        if let hit = cachedWidgetContainer,
+           FileManager.default.fileExists(atPath: hit.path) { return hit }
+        let fm = FileManager.default
+        for base in ["/var/mobile/Containers/Data/PluginKitExtension",
+                     "/var/mobile/Containers/Data/PluginKitPlugin"] {
+            guard let entries = try? fm.contentsOfDirectory(atPath: base) else { continue }
+            for e in entries {
+                let meta = base + "/" + e + "/.com.apple.containermanagerd.metadata.plist"
+                guard let data = fm.contents(atPath: meta),
+                      let obj = try? PropertyListSerialization.propertyList(
+                          from: data, options: [], format: nil)
+                else { continue }
+                if String(describing: obj).contains(widgetBundleID) {
+                    let u = URL(fileURLWithPath: base + "/" + e)
+                    cachedWidgetContainer = u
+                    return u
+                }
+            }
+        }
+        return nil
+    }
+
+    /// mobile 用户的 uid（写入文件后 chown，保证小组件进程可覆盖写）
+    private static var mobileUID: Int {
+        if let a = try? FileManager.default.attributesOfItem(atPath: "/var/mobile"),
+           let u = a[.ownerAccountID] as? Int { return u }
+        return 501
+    }
+
+    /// root 写完的文件要归还给 mobile，否则小组件进程无法覆盖写
+    private static func fixOwner(_ path: String) {
+        let fm = FileManager.default
+        try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+        let uid = mobileUID
+        try? fm.setAttributes([.ownerAccountID: uid, .groupAccountID: uid],
+                              ofItemAtPath: path)
+    }
+
+    /// 把配置/快照注入小组件沙盒。仅宿主 App（root）调用有意义。
+    /// @return 状态文案（诊断用）
+    @discardableResult
+    static func pushToWidgetContainer(config: Config?, snapshot: VehicleSnapshot?) -> String {
+        guard !isExtension else { return "—（小组件进程内不可注入）" }
+        let fm = FileManager.default
+        guard let c = widgetContainerURL() else {
+            cachedWidgetContainer = nil
+            return "❌ 未找到小组件容器"
+        }
+        let share = c.appendingPathComponent("Library/MG7Share", isDirectory: true)
+        try? fm.createDirectory(at: share, withIntermediateDirectories: true,
+                                attributes: [.posixPermissions: 0o755])
+        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: share.path)
+        var ok = false
+        if let cfg = config, let data = try? PropertyListEncoder().encode(cfg) {
+            let f = share.appendingPathComponent("config.plist")
+            if (try? data.write(to: f, options: .atomic)) != nil {
+                fixOwner(f.path); ok = true
+            }
+        }
+        if let snap = snapshot {
+            let enc = JSONEncoder()
+            enc.dateEncodingStrategy = .iso8601
+            if let data = try? enc.encode(snap) {
+                let f = share.appendingPathComponent("snapshot.json")
+                if (try? data.write(to: f, options: .atomic)) != nil {
+                    fixOwner(f.path); ok = true
+                }
+            }
+        }
+        return ok ? "✅ 已注入" : "⚠️ 注入失败(权限?)"
+    }
+
+    /// 诊断文案（设置页「小组件数据注入」行）
+    static func pushStatusText() -> String {
+        guard !isExtension else { return "—" }
+        guard let c = widgetContainerURL() else { return "❌ 未找到容器" }
+        let f = c.appendingPathComponent("Library/MG7Share/snapshot.json").path
+        if FileManager.default.fileExists(atPath: f) { return "✅ 已注入" }
+        return "⚠️ 已定位，待刷新"
+    }
+
+    /// 本进程容器里的注入文件路径（小组件侧读这里；App 侧同名路径不存在，天然空读）
+    private static var ownShareConfigURL: URL {
+        let lib = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+        return lib.appendingPathComponent("MG7Share/config.plist")
+    }
+    private static var ownShareSnapshotURL: URL {
+        let lib = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+        return lib.appendingPathComponent("MG7Share/snapshot.json")
+    }
+
     // MARK: - 旧固定路径（回退用）
 
     private static func ensureSharedDir() -> URL? {
@@ -123,10 +235,20 @@ enum MG7Store {
            let data = try? PropertyListEncoder().encode(c) {
             try? data.write(to: dir.appendingPathComponent("config.plist"), options: .atomic)
         }
+        // ④ App(root)：注入小组件沙盒（配置变了小组件要能立刻读到，v0.4.2）
+        if !isExtension {
+            pushToWidgetContainer(config: c, snapshot: nil)
+        }
     }
 
     static func loadConfig() -> Config {
-        // 优先级：UserDefaults → group 容器文件 → 旧固定路径
+        // 优先级：
+        // ① 本容器注入文件（小组件进程读宿主 App(root) 写进来的；App 进程同名路径不存在，空读）
+        // ② UserDefaults suite → ③ group 容器文件 → ④ 旧固定路径
+        if let data = try? Data(contentsOf: ownShareConfigURL),
+           let c = try? PropertyListDecoder().decode(Config.self, from: data) {
+            return c
+        }
         if let d = sharedDefaults, let json = d.data(forKey: "config"),
            let c = try? JSONDecoder().decode(Config.self, from: json) {
             return c
@@ -164,13 +286,24 @@ enum MG7Store {
 
         // ③ UserDefaults suite（双保险）
         sharedDefaults?.set(data, forKey: "snapshot")
+
+        // ④ App(root)：注入小组件沙盒（App Group 未分配时的实际通道，v0.4.2）
+        if !isExtension {
+            pushToWidgetContainer(config: nil, snapshot: s)
+        }
     }
 
     static func loadSnapshot() -> VehicleSnapshot? {
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
 
-        // 优先级：group 容器文件 → UserDefaults → 旧固定路径
+        // 优先级：
+        // ① 本容器注入文件（App 推来的；小组件进程内是宿主写的，App 进程内空读）
+        // ② group 容器文件 → ③ UserDefaults → ④ 旧固定路径
+        if let data = try? Data(contentsOf: ownShareSnapshotURL),
+           let s = try? dec.decode(VehicleSnapshot.self, from: data) {
+            return s
+        }
         if let dir = groupDirectory,
            let data = try? Data(contentsOf: dir.appendingPathComponent("snapshot.json")),
            let s = try? dec.decode(VehicleSnapshot.self, from: data) {

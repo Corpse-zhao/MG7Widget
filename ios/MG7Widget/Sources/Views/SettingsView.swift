@@ -112,6 +112,12 @@ struct SettingsView: View {
                         Text(AppInfo.author).foregroundColor(MGTheme.textSecondary)
                     }
                     HStack {
+                        Text("小组件数据注入")
+                        Spacer()
+                        Text(MG7Store.pushStatusText()).foregroundColor(MGTheme.textSecondary)
+                            .font(.system(size: 12))
+                    }
+                    HStack {
                         Text("App Group 容器")
                         Spacer()
                         Text(groupStatusText).foregroundColor(MGTheme.textSecondary)
@@ -126,7 +132,7 @@ struct SettingsView: View {
                 } header: {
                     Text("关于")
                 } footer: {
-                    Text("App Group 是小组件取数据的正规通道：显示「容器正常」时小组件应能自主刷新；显示「未分配」则系统未给本 App 分配共享容器（需重启手机或重新安装触发）。")
+                    Text("数据通道：显示「小组件数据注入 ✅」时，打开本 App / 下拉刷新都会把最新车况直接推进小组件沙盒，小组件每 15 分钟也会自主联网刷新。「App Group 未分配」是 TrollStore 签名下的正常现象，不影响新通道。")
                 }
             }
             .navigationTitle("设置")

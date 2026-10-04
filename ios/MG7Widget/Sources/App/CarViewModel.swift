@@ -38,6 +38,10 @@ final class CarViewModel: ObservableObject {
     }
 
     func onLaunch() {
+        // 开屏即注入：哪怕没网，也能把「上次的车况 + 配置」推进小组件沙盒
+        // （App Group 未分配后，这是小组件拿到数据的唯一被动通道，v0.4.2）
+        MG7Store.pushToWidgetContainer(config: config, snapshot: snapshot)
+        WidgetCenter.shared.reloadAllTimelines()
         if config.isValid {
             Task { await refresh() }
         } else {
@@ -106,7 +110,7 @@ final class CarViewModel: ObservableObject {
 
     func updateConfig(_ c: MG7Store.Config) {
         config = c
-        MG7Store.saveConfig(c)
+        MG7Store.saveConfig(c)   // 内部已注入小组件沙盒
         let key = c.amapKey
         let gcj = c.coordsAreGCJ02
         let cid = c.aliClientId
@@ -115,6 +119,8 @@ final class CarViewModel: ObservableObject {
             await LocationService.shared.setCoordsAreGCJ02(gcj)
             await SAICService.shared.setAliClientId(cid)
         }
+        // 配置变化（车名/高德key等）也通知小组件重画
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     func saveToken(_ token: String, vin: String, userId: String) {
