@@ -31,8 +31,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.banliren.mg7widget
         INFOPLIST_FILE: Resources/App-Info.plist
-        MARKETING_VERSION: "0.4.16"
-        CURRENT_PROJECT_VERSION: "30"
+        MARKETING_VERSION: "0.4.17"
+        CURRENT_PROJECT_VERSION: "31"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     dependencies:
@@ -55,8 +55,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.banliren.mg7widget.widget
         INFOPLIST_FILE: Resources/Widget-Info.plist
-        MARKETING_VERSION: "0.4.16"
-        CURRENT_PROJECT_VERSION: "30"
+        MARKETING_VERSION: "0.4.17"
+        CURRENT_PROJECT_VERSION: "31"
         SKIP_INSTALL: "YES"
         APPLICATION_EXTENSION_API_ONLY: "YES"
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor

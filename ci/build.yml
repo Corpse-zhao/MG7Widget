@@ -57,30 +57,15 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP" Payload/
-          # v0.4.7 关键修复：显式嵌入 entitlements。
-          # CODE_SIGNING_ALLOWED=NO 构建出的二进制没有签名 blob（entitlements 根本没嵌），
-          # TrollStore 重签时用默认 entitlements（无 no-sandbox）→ App 带沙盒跑 →
-          # 扫不了小组件的 PluginKitExtension 容器 → v0.4.3~0.4.6「❌ 目录不可达(沙盒?)」根因。
-          # ldid 嵌入的 entitlements 是 XML 明文，TrollStore 安装时会保留并 platformize。
           APPDIR="Payload/$(basename "$APP")"
           APPBIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APPDIR/Info.plist")
           EXTDIR=$(find "$APPDIR/PlugIns" -maxdepth 1 -name '*.appex' | head -1)
           EXTBIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$EXTDIR/Info.plist")
-          echo "ldid in use: $(which ldid)"
-          # v0.4.16: ldid-procursus(opt 全路径) 嵌 entitlements
-          LDID="$(brew --prefix)/opt/ldid-procursus/bin/ldid"
-          "$LDID" -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/App.entitlements" "$APPDIR/$APPBIN"
-          "$LDID" -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/Widget.entitlements" "$EXTDIR/$EXTBIN"
-          echo "ldid 嵌入 entitlements: $APPDIR/$APPBIN + PlugIns/$(basename "$EXTDIR")/$EXTBIN"
-          # v0.4.8 CI 内守门：ldid -S 退出 0 ≠ entitlements 真嵌入（连 application-groups key 都扫不到实锤过）。
-          # ldid -e 读回 entitlements 明文，关键 key 必须 FOUND，否则 fail run 不出包。
-          # 诊断：dump codesign 读回输出（不 gate，供日志定位）
-          codesign -d --entitlements :- "$APPDIR/$APPBIN" 2>&1 | head -8 || true
-          # 守门：二进制字符串扫描（XML/DER blob 中键名均明文，零格式歧义；run#33/34实锤 ldid -e 与
-          # codesign -d 管道读回均有兼容坑）
-          grep -aq no-sandbox "$APPDIR/$APPBIN" || { echo "::error::主App no-sandbox 未嵌入"; exit 1; }
-          grep -aq application-groups "$EXTDIR/$EXTBIN" || { echo "::error::小组件 App Group 未嵌入"; exit 1; }
-          echo "entitlements 验证通过: 主App no-sandbox + 小组件 application-groups 均嵌入"
+          echo "产物: $APPDIR/$APPBIN + PlugIns/$(basename "$EXTDIR")/$EXTBIN"
+          # v0.4.17: 嵌入环节移至本地交付（deliver_0417.py：本地 procursus ldid.exe 嵌入+守门+Release）。
+          # CI 环境嵌入九轮实锤全部静默失败/剥离：saurik 版(run#29/30)、procursus release 下载不稳
+          # (run#31/32)、codesign 剥离 com.apple.* 键(run#33/34/35)、brew procursus 亦无效(run#36/37)。
+          # 而 procursus ldid 的 Windows 版对 CI 同源产物全矩阵实锤嵌入成功 —— 关键路径移出 CI。
           zip -qr MG7Widget.tipa Payload
           ls -lh MG7Widget.tipa
           test $(stat -f%z MG7Widget.tipa) -gt 100000 || { echo "::error::tipa 过小，打包异常"; exit 1; }
