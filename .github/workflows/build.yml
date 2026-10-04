@@ -19,11 +19,12 @@ jobs:
 
       - name: 安装工具
         run: |
-          brew install make xz ldid xcodegen ldid-procursus
+          brew install make xz xcodegen ldid-procursus
           echo "$(brew --prefix)/opt/make/libexec/gnubin" >> $GITHUB_PATH
-          echo "ldid-procursus at: $(command -v ldid-procursus || find "$(brew --prefix)" -name 'ldid-procursus' -type f | head -1)"
-          # v0.4.15: codesign 弃用（run#35诊断实锤 macOS15 codesign 对 ad-hoc 静默剥离 com.apple.* 键 -> 空 dict）
-          # entitlements 嵌入改用 brew ldid-procursus（本地 Windows 版已全矩阵实锤可嵌；bottle 走 ghcr 稳定）
+          ln -sf "$(brew --prefix)/opt/ldid-procursus/bin/ldid" "$(brew --prefix)/bin/ldid"
+          echo "ldid(procursus) at: $(command -v ldid)"
+          # v0.4.16: ldid 与 ldid-procursus 是冲突 formula 不能共存(run#36实锤) -> 只装 procursus
+          # procursus 版带 entitlements 内存修复 patch(#34/#14)，且 formula test 即 -S嵌/-e读全链验证
 
       # ---------- 1. Xcode 工程：(App + Widget Extension) ----------
       - name: 生成 Xcode 工程
@@ -66,9 +67,10 @@ jobs:
           EXTDIR=$(find "$APPDIR/PlugIns" -maxdepth 1 -name '*.appex' | head -1)
           EXTBIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$EXTDIR/Info.plist")
           echo "ldid in use: $(which ldid)"
-          # v0.4.15: ldid-procursus 嵌 entitlements（本地全矩阵实锤可嵌）
-          ldid-procursus -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/App.entitlements" "$APPDIR/$APPBIN"
-          ldid-procursus -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/Widget.entitlements" "$EXTDIR/$EXTBIN"
+          # v0.4.16: ldid-procursus(opt 全路径) 嵌 entitlements
+          LDID="$(brew --prefix)/opt/ldid-procursus/bin/ldid"
+          "$LDID" -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/App.entitlements" "$APPDIR/$APPBIN"
+          "$LDID" -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/Widget.entitlements" "$EXTDIR/$EXTBIN"
           echo "ldid 嵌入 entitlements: $APPDIR/$APPBIN + PlugIns/$(basename "$EXTDIR")/$EXTBIN"
           # v0.4.8 CI 内守门：ldid -S 退出 0 ≠ entitlements 真嵌入（连 application-groups key 都扫不到实锤过）。
           # ldid -e 读回 entitlements 明文，关键 key 必须 FOUND，否则 fail run 不出包。
@@ -76,8 +78,8 @@ jobs:
           codesign -d --entitlements :- "$APPDIR/$APPBIN" 2>&1 | head -8 || true
           # 守门：二进制字符串扫描（XML/DER blob 中键名均明文，零格式歧义；run#33/34实锤 ldid -e 与
           # codesign -d 管道读回均有兼容坑）
-          grep -aq no-sandbox "$APPDIR/$APPBIN" || { echo "::error::主App no-sandbox 未嵌入(ldid-procursus)"; exit 1; }
-          grep -aq application-groups "$EXTDIR/$EXTBIN" || { echo "::error::小组件 App Group 未嵌入(ldid-procursus)"; exit 1; }
+          grep -aq no-sandbox "$APPDIR/$APPBIN" || { echo "::error::主App no-sandbox 未嵌入"; exit 1; }
+          grep -aq application-groups "$EXTDIR/$EXTBIN" || { echo "::error::小组件 App Group 未嵌入"; exit 1; }
           echo "entitlements 验证通过: 主App no-sandbox + 小组件 application-groups 均嵌入"
           zip -qr MG7Widget.tipa Payload
           ls -lh MG7Widget.tipa
