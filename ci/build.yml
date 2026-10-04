@@ -65,6 +65,11 @@ jobs:
           ldid -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/App.entitlements" "$APPDIR/$APPBIN"
           ldid -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/Widget.entitlements" "$EXTDIR/$EXTBIN"
           echo "ldid 嵌入 entitlements: $APPDIR/$APPBIN + PlugIns/$(basename "$EXTDIR")/$EXTBIN"
+          # v0.4.8 CI 内守门：ldid -S 退出 0 ≠ entitlements 真嵌入（连 application-groups key 都扫不到实锤过）。
+          # ldid -e 读回 entitlements 明文，关键 key 必须 FOUND，否则 fail run 不出包。
+          ldid -e "$APPDIR/$APPBIN" | grep -q no-sandbox || { echo "::error::主App no-sandbox 未嵌入(ldid -S静默失败?)"; exit 1; }
+          ldid -e "$EXTDIR/$EXTBIN" | grep -q application-groups || { echo "::error::小组件 App Group 未嵌入"; exit 1; }
+          echo "entitlements 验证通过: 主App no-sandbox + 小组件 application-groups 均嵌入"
           zip -qr MG7Widget.tipa Payload
           ls -lh MG7Widget.tipa
           test $(stat -f%z MG7Widget.tipa) -gt 100000 || { echo "::error::tipa 过小，打包异常"; exit 1; }
