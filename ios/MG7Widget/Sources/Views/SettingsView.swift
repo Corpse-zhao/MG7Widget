@@ -67,7 +67,7 @@ struct SettingsView: View {
                     Toggle(isOn: $coordsGCJ) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("车辆坐标为火星坐标 (GCJ-02)")
-                            Text("国内车联网标准。开着导航终点才准；若发现偏移几百米，试着切换")
+                            Text("实测 MG7 后台返回 WGS-84（GPS 原始值），请保持关闭；v0.4.2 前误判开启导致偏 1.2km")
                                 .font(.system(size: 10))
                                 .foregroundColor(MGTheme.textSecondary)
                         }

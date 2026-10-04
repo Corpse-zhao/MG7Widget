@@ -137,13 +137,21 @@ enum MG7Store {
         return ok ? "✅ 已注入" : "⚠️ 注入失败(权限?)"
     }
 
-    /// 诊断文案（设置页「小组件数据注入」行）
+    /// 诊断文案（设置页「小组件数据注入」行）——区分失败原因，便于远程定位
     static func pushStatusText() -> String {
         guard !isExtension else { return "—" }
-        guard let c = widgetContainerURL() else { return "❌ 未找到容器" }
-        let f = c.appendingPathComponent("Library/MG7Share/snapshot.json").path
-        if FileManager.default.fileExists(atPath: f) { return "✅ 已注入" }
-        return "⚠️ 已定位，待刷新"
+        if let c = widgetContainerURL() {
+            let f = c.appendingPathComponent("Library/MG7Share/snapshot.json").path
+            if FileManager.default.fileExists(atPath: f) { return "✅ 已注入" }
+            return "⚠️ 已定位,待刷新"
+        }
+        // 区分：目录都不可达（沙盒挡住）vs 可达但没匹配到小组件容器
+        let fm = FileManager.default
+        let a = try? fm.contentsOfDirectory(atPath: "/var/mobile/Containers/Data/PluginKitExtension")
+        let b = try? fm.contentsOfDirectory(atPath: "/var/mobile/Containers/Data/PluginKitPlugin")
+        if a == nil && b == nil { return "❌ 目录不可达(沙盒?)" }
+        let n = (a?.count ?? 0) + (b?.count ?? 0)
+        return "❌ 扫了\(n)个容器未匹配"
     }
 
     /// 本进程容器里的注入文件路径（小组件侧读这里；App 侧同名路径不存在，天然空读）
@@ -207,9 +215,14 @@ enum MG7Store {
         var lastTokenSync: Date = .distantPast
         /// 高德 Web 服务 key（可选，填了定位更准；留空则用系统 CLGeocoder）
         var amapKey: String = ""
-        /// 车辆坐标是否为 GCJ-02 火星坐标（国内车联网法规默认就是）。
-        /// 开 = 交给系统地图/地理编码前先转 WGS-84，抵消系统内部纠偏，否则偏 500-700 米
-        var coordsAreGCJ02: Bool = true
+        /// 车辆坐标是否为 GCJ-02 火星坐标。
+        /// ⚠️ 2026-10-04 实测定论：MG 后台返回 **WGS-84（GPS 原始值）**，此开关应保持关闭！
+        /// 依据：官方 App 定位「盈丰中路35号」 vs 我们 v0.4.2 显示「南洲北路751号」，
+        /// 偏差 1256m ≈ 2×广州典型 GCJ 偏移(623m)——说明坐标被多转/漏转了一个 Δ。
+        /// v0.4.2 之前默认 true 是误判（SAIC 坐标当 GCJ 处理导致双重偏移）。
+        var coordsAreGCJ02: Bool = false
+        /// 一次性迁移标记：v0.4.3 起坐标结论反转，旧配置里的 true 需重置
+        var coordFixV3: Bool = false
         /// 控车用的阿里云 MQTT 设备 ID（从 MG Live 抓包 mqttpublish 请求取，留空用内置默认）
         var aliClientId: String = ""
 
@@ -245,24 +258,39 @@ enum MG7Store {
         // 优先级：
         // ① 本容器注入文件（小组件进程读宿主 App(root) 写进来的；App 进程同名路径不存在，空读）
         // ② UserDefaults suite → ③ group 容器文件 → ④ 旧固定路径
-        if let data = try? Data(contentsOf: ownShareConfigURL),
-           let c = try? PropertyListDecoder().decode(Config.self, from: data) {
-            return c
+        for url in [ownShareConfigURL] {
+            if let data = try? Data(contentsOf: url),
+               var c = try? PropertyListDecoder().decode(Config.self, from: data) {
+                migrateCoords(&c)
+                return c
+            }
         }
         if let d = sharedDefaults, let json = d.data(forKey: "config"),
-           let c = try? JSONDecoder().decode(Config.self, from: json) {
+           var c = try? JSONDecoder().decode(Config.self, from: json) {
+            migrateCoords(&c)
             return c
         }
         if let dir = groupDirectory,
            let data = try? Data(contentsOf: dir.appendingPathComponent("config.plist")),
-           let c = try? PropertyListDecoder().decode(Config.self, from: data) {
+           var c = try? PropertyListDecoder().decode(Config.self, from: data) {
+            migrateCoords(&c)
             return c
         }
         if let data = try? Data(contentsOf: configURL),
-           let c = try? PropertyListDecoder().decode(Config.self, from: data) {
+           var c = try? PropertyListDecoder().decode(Config.self, from: data) {
+            migrateCoords(&c)
             return c
         }
         return Config()
+    }
+
+    /// v0.4.3 一次性迁移：坐标结论反转（实测 SAIC=WGS-84），
+    /// 把旧配置里的 coordsAreGCJ02=true 重置为 false（只做一次，尊重之后的手动改动）
+    private static func migrateCoords(_ c: inout Config) {
+        guard !c.coordFixV3 else { return }
+        c.coordsAreGCJ02 = false
+        c.coordFixV3 = true
+        saveConfig(c)
     }
 
     // MARK: - 车况快照

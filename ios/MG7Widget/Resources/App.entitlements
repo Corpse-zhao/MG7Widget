@@ -10,5 +10,8 @@
 	<array>
 		<string>/var/mobile/Library/MG7Widget/</string>
 	</array>
+	<!-- TrollStore：解除沙盒，App 才能扫描小组件的 PluginKitExtension 容器（v0.4.3） -->
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
 </dict>
 </plist>
