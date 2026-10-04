@@ -303,9 +303,10 @@ actor SAICService {
         req.setValue("gzip, deflate, br", forHTTPHeaderField: "Accept-Encoding")
         req.setValue("16.6", forHTTPHeaderField: "osVersion")
         // Uuid 头 = aliClientId 的 @@@ 后段（GID_ios_mg@@@UUID → UUID，实测一致）
-        if let uuidPart = aliClientId.split(separator: "@@@").last.map(String.init),
-           !uuidPart.isEmpty {
-            req.setValue(uuidPart, forHTTPHeaderField: "Uuid")
+        // 注意：不能用 String.split(separator:)——它要求 iOS 16+，本工程部署目标为 15.0。
+        if let r = aliClientId.range(of: "@@@", options: .backwards) {
+            let uuidPart = String(aliClientId[r.upperBound...])
+            if !uuidPart.isEmpty { req.setValue(uuidPart, forHTTPHeaderField: "Uuid") }
         }
         req.setValue("*/*", forHTTPHeaderField: "Accept")
         req.setValue(token, forHTTPHeaderField: "token")
