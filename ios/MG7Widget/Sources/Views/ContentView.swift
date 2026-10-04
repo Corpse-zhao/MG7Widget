@@ -296,7 +296,7 @@ struct ContentView: View {
                         }
                     }
                     Button {
-                        openMaps(lat: lat, lon: lon)
+                        openNavigation(lat: lat, lon: lon)
                     } label: {
                         Label("导航到车辆", systemImage: "arrow.triangle.turn.up.right.circle.fill")
                             .font(.system(size: 13, weight: .semibold))
@@ -308,6 +308,29 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// 导航：默认高德（未装自动回落 Apple 地图）
+    ///
+    /// ⚠️ 高德 URI API 的 dev 参数：
+    ///   dev=1 → lat/lon 为 WGS-84 原始 GPS 坐标，高德服务端自动纠偏为 GCJ-02；
+    ///   dev=0 → lat/lon 已是 GCJ-02。
+    /// MG7 后台实测返回 WGS-84（v0.4.3 定论）→ 默认 dev=1，客户端**不做**坐标转换，
+    /// 否则转了再让高德转 = 双重纠偏，终点又偏 ~600m。
+    private func openNavigation(lat: Double, lon: Double) {
+        let dev = vm.config.coordsAreGCJ02 ? 0 : 1
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        let name = vm.config.carName.addingPercentEncoding(withAllowedCharacters: allowed) ?? "%E8%BD%A6%E8%BE%86"
+        let urlStr = "iosamap://path?sourceApplication=MG7Widget&backScheme=mg7widget"
+            + "&poiname=\(name)"
+            + String(format: "&lat=%.6f&lon=%.6f", lat, lon)
+            + "&dev=\(dev)&style=2"
+        guard let url = URL(string: urlStr) else {
+            openMaps(lat: lat, lon: lon); return
+        }
+        UIApplication.shared.open(url) { ok in
+            if !ok { openMaps(lat: lat, lon: lon) }   // 未装高德 → Apple 地图兜底
         }
     }
 
