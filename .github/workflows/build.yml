@@ -21,6 +21,12 @@ jobs:
         run: |
           brew install make xz ldid xcodegen
           echo "$(brew --prefix)/opt/make/libexec/gnubin" >> $GITHUB_PATH
+          # v0.4.10: Homebrew saurik 版 ldid 2.1.5_1 的 -S<file> 嵌 entitlements 静默失败
+          # (v0.4.8/v0.4.9 CI 守门两次实锤; 本地复现: 同输入同语法 procursus 版嵌入成功)
+          # → 覆盖为 Procursus 构建 (TrollStore/theos 生态标配)
+          curl -sL -o /opt/homebrew/bin/ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_arm64
+          chmod +x /opt/homebrew/bin/ldid
+          echo "ldid replaced: $(which ldid)"
 
       # ---------- 1. Xcode 工程：(App + Widget Extension) ----------
       - name: 生成 Xcode 工程
@@ -62,6 +68,7 @@ jobs:
           APPBIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APPDIR/Info.plist")
           EXTDIR=$(find "$APPDIR/PlugIns" -maxdepth 1 -name '*.appex' | head -1)
           EXTBIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$EXTDIR/Info.plist")
+          echo "ldid in use: $(which ldid)"
           ldid -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/App.entitlements" "$APPDIR/$APPBIN"
           ldid -S"$GITHUB_WORKSPACE/ios/MG7Widget/Resources/Widget.entitlements" "$EXTDIR/$EXTBIN"
           echo "ldid 嵌入 entitlements: $APPDIR/$APPBIN + PlugIns/$(basename "$EXTDIR")/$EXTBIN"
