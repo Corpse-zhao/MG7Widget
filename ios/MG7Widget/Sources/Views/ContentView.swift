@@ -313,19 +313,20 @@ struct ContentView: View {
 
     /// 导航：默认高德（未装自动回落 Apple 地图）
     ///
-    /// ⚠️ 高德 URI API 的 dev 参数：
-    ///   dev=1 → lat/lon 为 WGS-84 原始 GPS 坐标，高德服务端自动纠偏为 GCJ-02；
-    ///   dev=0 → lat/lon 已是 GCJ-02。
-    /// MG7 后台实测返回 WGS-84（v0.4.3 定论）→ 默认 dev=1，客户端**不做**坐标转换，
-    /// 否则转了再让高德转 = 双重纠偏，终点又偏 ~600m。
+    /// ⚠️ 高德 URI `iosamap://path` 的终点参数是 **dlat/dlon/dname**（v0.4.6 实锤）：
+    ///   老格式 lat/lon/poiname 新版高德已不认 → 跳转后终点为空、提示手动输入（v0.4.5 踩坑）。
+    ///   dlat/dlon + dev=1 = WGS-84 原始坐标，由高德服务端纠偏；dev=0 = 已是 GCJ-02。
+    ///   MG7 后台实测返回 WGS-84（v0.4.3 定论）→ 默认 dev=1，客户端**不做**坐标转换，
+    ///   否则转了再让高德转 = 双重纠偏，终点又偏 ~600m。
+    ///   t=0 驾车。Info.plist 已配 LSApplicationQueriesSchemes=[iosamap]（iOS 9+ 官方要求）。
     private func openNavigation(lat: Double, lon: Double) {
         let dev = vm.config.coordsAreGCJ02 ? 0 : 1
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         let name = vm.config.carName.addingPercentEncoding(withAllowedCharacters: allowed) ?? "%E8%BD%A6%E8%BE%86"
-        let urlStr = "iosamap://path?sourceApplication=MG7Widget&backScheme=mg7widget"
-            + "&poiname=\(name)"
-            + String(format: "&lat=%.6f&lon=%.6f", lat, lon)
-            + "&dev=\(dev)&style=2"
+        let urlStr = "iosamap://path?sourceApplication=MG7Widget"
+            + "&dname=\(name)"
+            + String(format: "&dlat=%.6f&dlon=%.6f", lat, lon)
+            + "&dev=\(dev)&t=0"
         guard let url = URL(string: urlStr) else {
             openMaps(lat: lat, lon: lon); return
         }
