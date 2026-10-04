@@ -24,7 +24,8 @@ jobs:
           # v0.4.10: Homebrew saurik 版 ldid 2.1.5_1 的 -S<file> 嵌 entitlements 静默失败
           # (v0.4.8/v0.4.9 CI 守门两次实锤; 本地复现: 同输入同语法 procursus 版嵌入成功)
           # → 覆盖为 Procursus 构建 (TrollStore/theos 生态标配)
-          curl -sL -o /opt/homebrew/bin/ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_arm64
+          curl -sL --retry 5 --retry-delay 2 --retry-all-errors -o /opt/homebrew/bin/ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_arm64
+          test $(stat -f%z /opt/homebrew/bin/ldid) -gt 100000 || { echo "::error::procursus ldid 下载异常(过小)"; exit 1; }
           chmod +x /opt/homebrew/bin/ldid
           echo "ldid replaced: $(which ldid)"
 
