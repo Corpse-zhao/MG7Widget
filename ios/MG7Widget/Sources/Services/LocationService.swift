@@ -32,23 +32,41 @@ actor LocationService {
         cache.removeAll()   // key 变了，缓存作废
     }
 
+    /// 车辆坐标是否为 GCJ-02（默认是，见 CoordTransform.swift 头注释）
+    private var coordsAreGCJ02: Bool = true
+    func setCoordsAreGCJ02(_ v: Bool) {
+        coordsAreGCJ02 = v
+        cache.removeAll()
+    }
+
     /// 最近一次地址来源，便于 UI 提示精度
     private(set) var lastSource: String = ""
 
     /// 经纬度 → 中文地址
+    /// 入参约定：SAIC 原始坐标（GCJ-02，若开关开）。
+    /// 内部会先转 WGS-84 再喂给系统服务（系统内部会再纠偏回 GCJ，正好抵消）。
     func reverseGeocode(lat: Double?, lon: Double?) async -> String? {
         guard let lat = lat, let lon = lon, lat != 0, lon != 0 else { return nil }
-        let key = String(format: "%.5f,%.5f", lat, lon)   // 5 位小数 ≈ 1m
+        let key = String(format: "%.5f,%.5f", lat, lon) + (coordsAreGCJ02 ? "|g" : "|w")
         if let hit = cache[key] { return hit }
 
-        // 1) 高德（高精度）
-        if !amapKey.isEmpty, let addr = await amap(lat: lat, lon: lon) {
-            cache[key] = addr; lastSource = "高德"
-            return addr
+        // 若车辆坐标是 GCJ-02，先转 WGS-84（系统服务期望 WGS 输入）
+        let (wLat, wLon) = coordsAreGCJ02
+            ? CoordTransform.gcj2wgs(lat: lat, lon: lon)
+            : (lat, lon)
+
+        // 1) 高德（高精度）。注意：高德吃 GCJ-02 ——
+        //    坐标本来就是 GCJ 就直接传；是 WGS 就带 coordsys=wgs84 让它转
+        if !amapKey.isEmpty {
+            let (aLat, aLon) = coordsAreGCJ02 ? (lat, lon) : (wLat, wLon)
+            if let addr = await amap(lat: aLat, lon: aLon, inputIsWGS: !coordsAreGCJ02) {
+                cache[key] = addr; lastSource = "高德"
+                return addr
+            }
         }
 
-        // 2) CLGeocoder 回退
-        if let addr = await clGeocode(lat: lat, lon: lon) {
+        // 2) CLGeocoder 回退（内部会 WGS→GCJ 查询，所以喂 WGS）
+        if let addr = await clGeocode(lat: wLat, lon: wLon) {
             cache[key] = addr; lastSource = "系统"
             return addr
         }
@@ -58,14 +76,13 @@ actor LocationService {
 
     // MARK: - 高德 Web 服务逆地理
 
-    private func amap(lat: Double, lon: Double) async -> String? {
-        // coordsys=wgs84：告诉高德我们给的是 GPS 原始坐标，由它转 GCJ-02
-        let urlStr = "https://restapi.amap.com/v3/geocode/regeo"
+    private func amap(lat: Double, lon: Double, inputIsWGS: Bool) async -> String? {
+        // inputIsWGS 时带 coordsys=wgs84 让高德转换；输入已是 GCJ 则不带
+        var urlStr = "https://restapi.amap.com/v3/geocode/regeo"
             + "?key=\(amapKey)"
             + "&location=\(String(format: "%.6f,%.6f", lon, lat))"
-            + "&coordsys=wgs84"
-            + "&extensions=base"
-            + "&output=JSON"
+        if inputIsWGS { urlStr += "&coordsys=wgs84" }
+        urlStr += "&extensions=base&output=JSON"
         guard let url = URL(string: urlStr) else { return nil }
 
         do {

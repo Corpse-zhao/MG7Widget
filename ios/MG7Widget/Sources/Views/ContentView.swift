@@ -313,7 +313,12 @@ struct ContentView: View {
     }
 
     private func openMaps(lat: Double, lon: Double) {
-        let url = URL(string: "http://maps.apple.com/?daddr=\(lat),\(lon)&dirflg=d")!
+        // Apple 地图对中国区输入坐标会做一次 WGS→GCJ 纠偏；
+        // 车辆坐标本来就是 GCJ-02 → 先转 WGS 传过去，正好抵消，终点落回真实位置
+        let p = vm.config.coordsAreGCJ02
+            ? CoordTransform.gcj2wgs(lat: lat, lon: lon)
+            : (lat: lat, lon: lon)
+        let url = URL(string: "http://maps.apple.com/?daddr=\(p.lat),\(p.lon)&dirflg=d")!
         UIApplication.shared.open(url)
     }
 

@@ -24,21 +24,41 @@ struct MG7Provider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (MG7Entry) -> Void) {
-        completion(load())
+        Task {
+            let e = await load()
+            completion(e)
+        }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<MG7Entry>) -> Void) {
-        let entry = load()
-        // 每 15 分钟尝试刷新（系统会按策略节流）；真实数据更新靠 App 主动 reload
-        let next = Date().addingTimeInterval(15 * 60)
-        completion(Timeline(entries: [entry], policy: .after(next)))
+        Task {
+            let e = await load()
+            // 每 15 分钟自主刷新一次（WidgetKit 允许 timeline 重建时发网络请求）
+            let next = Date().addingTimeInterval(15 * 60)
+            completion(Timeline(entries: [e], policy: .after(next)))
+        }
     }
 
-    private func load() -> MG7Entry {
+    /// 加载策略（v0.4.0）：先读共享配置；配得上就直接自主联网拉车况，
+    /// 不再依赖「必须先开 App」。读不到配置则回退缓存快照。
+    private func load() async -> MG7Entry {
         let cfg = MG7Store.loadConfig()
-        return MG7Entry(date: Date(),
-                        snapshot: MG7Store.loadSnapshot(),
-                        carName: cfg.carName.isEmpty ? "我的 MG7" : cfg.carName)
+        let carName = cfg.carName.isEmpty ? "我的 MG7" : cfg.carName
+
+        // 有 token/vin → 自己拉一次车况（3 秒短超时，失败无缝回退缓存）
+        if cfg.isValid {
+            do {
+                var s = try await SAICService.shared.fetchSnapshot(
+                    token: cfg.accessToken, vin: cfg.vin)
+                // Widget 内不做反地理编码（慢 + 依赖授权）；沿用缓存里的地址
+                s.address = MG7Store.loadSnapshot()?.address
+                MG7Store.saveSnapshot(s)
+                return MG7Entry(date: Date(), snapshot: s, carName: carName)
+            } catch {
+                // 网络/鉴权失败 → 掉到缓存
+            }
+        }
+        return MG7Entry(date: Date(), snapshot: MG7Store.loadSnapshot(), carName: carName)
     }
 }
 

@@ -26,7 +26,15 @@ final class CarViewModel: ObservableObject {
         self.snapshot = MG7Store.loadSnapshot()
         updateRefreshText()
         let key = self.config.amapKey
-        if !key.isEmpty { Task { await LocationService.shared.setAmapKey(key) } }
+        let gcj = self.config.coordsAreGCJ02
+        let cid = self.config.aliClientId
+        if !key.isEmpty || !cid.isEmpty {
+            Task {
+                await LocationService.shared.setAmapKey(key)
+                await SAICService.shared.setAliClientId(cid)
+            }
+        }
+        Task { await LocationService.shared.setCoordsAreGCJ02(gcj) }
     }
 
     func onLaunch() {
@@ -100,7 +108,13 @@ final class CarViewModel: ObservableObject {
         config = c
         MG7Store.saveConfig(c)
         let key = c.amapKey
-        Task { await LocationService.shared.setAmapKey(key) }
+        let gcj = c.coordsAreGCJ02
+        let cid = c.aliClientId
+        Task {
+            await LocationService.shared.setAmapKey(key)
+            await LocationService.shared.setCoordsAreGCJ02(gcj)
+            await SAICService.shared.setAliClientId(cid)
+        }
     }
 
     func saveToken(_ token: String, vin: String, userId: String) {

@@ -17,6 +17,8 @@ struct SettingsView: View {
     @State private var carName = ""
     @State private var plate = ""
     @State private var amapKey = ""
+    @State private var coordsGCJ = true
+    @State private var aliClientId = ""
 
     var body: some View {
         NavigationView {
@@ -40,8 +42,14 @@ struct SettingsView: View {
                     TextField("user_id（可选，控车用）", text: $userId)
                         .font(.system(size: 12, design: .monospaced))
                         .keyboardType(.numberPad)
+                    TextField("aliClientId（控车用，见下方说明）", text: $aliClientId)
+                        .font(.system(size: 12, design: .monospaced))
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
                 } header: {
-                    Text("车辆信息")
+                    Text("车辆信息 / 控车参数")
+                } footer: {
+                    Text("aliClientId：抓包 MG Live 点一次锁车/解锁，找 mp.ebanma.com/app-mp/mqttpublish 请求，URL 里 data 参数解码后的 aliClientId 字段（形如 GID_ios_mg@@@XXXX）。填你自己手机上抓到的，指令才能推到你车机。")
                 }
 
                 Section {
@@ -56,6 +64,14 @@ struct SettingsView: View {
                         .font(.system(size: 12, design: .monospaced))
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
+                    Toggle(isOn: $coordsGCJ) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("车辆坐标为火星坐标 (GCJ-02)")
+                            Text("国内车联网标准。开着导航终点才准；若发现偏移几百米，试着切换")
+                                .font(.system(size: 10))
+                                .foregroundColor(MGTheme.textSecondary)
+                        }
+                    }
                 } header: {
                     Text("定位精度")
                 } footer: {
@@ -69,6 +85,8 @@ struct SettingsView: View {
                         c.carName = carName.isEmpty ? "我的 MG7" : carName
                         c.plateNumber = plate
                         c.amapKey = amapKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                        c.coordsAreGCJ02 = coordsGCJ
+                        c.aliClientId = aliClientId.trimmingCharacters(in: .whitespacesAndNewlines)
                         vm.updateConfig(c)
                         dismiss()
                     } label: {
@@ -94,6 +112,12 @@ struct SettingsView: View {
                         Text(AppInfo.author).foregroundColor(MGTheme.textSecondary)
                     }
                     HStack {
+                        Text("App Group 容器")
+                        Spacer()
+                        Text(groupStatusText).foregroundColor(MGTheme.textSecondary)
+                            .font(.system(size: 12))
+                    }
+                    HStack {
                         Text("共享目录")
                         Spacer()
                         Text("MG7Widget/").foregroundColor(MGTheme.textSecondary)
@@ -101,6 +125,8 @@ struct SettingsView: View {
                     }
                 } header: {
                     Text("关于")
+                } footer: {
+                    Text("App Group 是小组件取数据的正规通道：显示「容器正常」时小组件应能自主刷新；显示「未分配」则系统未给本 App 分配共享容器（需重启手机或重新安装触发）。")
                 }
             }
             .navigationTitle("设置")
@@ -117,7 +143,19 @@ struct SettingsView: View {
                 carName = vm.config.carName
                 plate = vm.config.plateNumber
                 amapKey = vm.config.amapKey
+                coordsGCJ = vm.config.coordsAreGCJ02
+                aliClientId = vm.config.aliClientId
             }
         }
+    }
+
+    /// App Group 通道诊断：未分配 → 共享机制整体失效，小组件只能靠自主联网兜底
+    private var groupStatusText: String {
+        guard let dir = MG7Store.groupDirectory else { return "❌ 未分配" }
+        let fm = FileManager.default
+        let snap = dir.appendingPathComponent("snapshot.json").path
+        if fm.fileExists(atPath: snap) { return "✅ 容器正常" }
+        if fm.fileExists(atPath: dir.path) { return "⚠️ 容器空(先刷新)" }
+        return "⚠️ 目录未建"
     }
 }

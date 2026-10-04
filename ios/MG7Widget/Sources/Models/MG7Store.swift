@@ -95,6 +95,11 @@ enum MG7Store {
         var lastTokenSync: Date = .distantPast
         /// 高德 Web 服务 key（可选，填了定位更准；留空则用系统 CLGeocoder）
         var amapKey: String = ""
+        /// 车辆坐标是否为 GCJ-02 火星坐标（国内车联网法规默认就是）。
+        /// 开 = 交给系统地图/地理编码前先转 WGS-84，抵消系统内部纠偏，否则偏 500-700 米
+        var coordsAreGCJ02: Bool = true
+        /// 控车用的阿里云 MQTT 设备 ID（从 MG Live 抓包 mqttpublish 请求取，留空用内置默认）
+        var aliClientId: String = ""
 
         var isValid: Bool {
             !accessToken.isEmpty && vin.count == 17
