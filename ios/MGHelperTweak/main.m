@@ -18,6 +18,10 @@
 
 #import <Foundation/Foundation.h>
 
+// v0.2.0 桥接模块（bridge.m）
+extern int bridgeRunOnce(void);
+extern int bridgeRunForever(void);
+
 #define SHARED_DIR  @"/var/mobile/Library/MGLiveWidget"
 
 static int g_scannedContainers = 0;
@@ -175,6 +179,10 @@ int main(int argc, char *argv[]) {
         setuid(0); setgid(0);
         if (argc > 1 && strcmp(argv[1], "dump") == 0) return dumpToken();
         if (argc > 1 && strcmp(argv[1], "diag") == 0) return refreshToken(YES);
+        // v0.2.0: 桥接模式（由 LaunchDaemon 以 root 拉起，把 App 容器的
+        // config.plist / snapshot.json 搬进小组件容器，绕开 TrollStore 的沙盒限制）
+        if (argc > 1 && strcmp(argv[1], "bridge") == 0) return bridgeRunForever();
+        if (argc > 1 && strcmp(argv[1], "bridge-once") == 0) return bridgeRunOnce();
         return refreshToken(NO);
     }
 }

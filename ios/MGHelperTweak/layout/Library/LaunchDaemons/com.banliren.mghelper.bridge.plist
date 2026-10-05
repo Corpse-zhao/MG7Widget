@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.banliren.mghelper.bridge</string>
+	<key>ProgramArguments</key>
+	<array>
+		<!-- roothide 下 launchd/libvroot 会把 jbroot 当根，二进制按 bootstrap 内路径写即可 -->
+		<string>/usr/bin/mghelper</string>
+		<string>bridge</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<!-- 刻意不设 StandardOutPath/StandardErrorPath：
+	   若其父目录不存在，launchd 会直接拒绝 spawn 整个 job。
+	   日志由守护进程自己 best-effort 写 /var/mobile/Library/MG7Widget/bridge.log -->
+</dict>
+</plist>
