@@ -1,13 +1,15 @@
 #!/bin/bash
-# mghelper postinst (v0.2.0)
+# mghelper postinst (v0.2.1)
 #  1) 给二进制加 setuid 位（owner root），让 mobile 身份跑它时自动提权
-#     —— iOS 上各 App 容器属于独立本地用户，mobile 读不了别人沙盒，必须 root
 #  2) 启动桥接守护进程：roothide 下 LaunchDaemon **不会自动加载**，必须在这里 load
-#  3) 立刻跑一次单次桥接，装完尽快让小组件拿到数据
+#  3) 立刻跑一次单次桥接（所以哪怕守护进程没起来，装完也应该有一次数据过桥）
+#  4) 踢一次 chronod，让小组件立刻重载时间线，不用等 15 分钟
 #
-# 兼容三种安装位置：roothide 随机 .jbroot-XXXX / rootless 的 /var/jb / rootful 真实根。
-# 找不到就直接退出（不阻断安装），用户可以手动排障。
+# 兼容 roothide 随机 .jbroot-XXXX / rootless 的 /var/jb / rootful 真实根。
+# 每一行都以 "MGHelper:" 开头输出，Sileo/Zebra 的安装日志里可以直接看到。
 log() { echo "MGHelper: $*"; }
+
+RELPATH="Library/LaunchDaemons/com.banliren.mghelper.bridge.plist"
 
 # ---- 定位 jbroot ----
 JB=""
@@ -15,7 +17,7 @@ for d in /var/containers/Bundle/Application/.jbroot* ; do
     [ -d "$d" ] && JB="$d" && break
 done
 if [ -z "$JB" ] && [ -d /var/jb ]; then JB="/var/jb"; fi
-log "jbroot=${JB:-<rootful>}"
+log "jbroot = ${JB:-<rootful 真实根>}"
 
 # ---- 在候选前缀里找文件：$JB / /var/jb / 真实根 ----
 lookup() {
@@ -31,40 +33,77 @@ BIN="$(lookup usr/bin/mghelper 2>/dev/null)"
 if [ -n "$BIN" ]; then
     chown root:wheel "$BIN" 2>/dev/null
     chmod 6755 "$BIN" 2>/dev/null
-    log "setuid set: $BIN -> $(ls -l "$BIN" 2>/dev/null | awk '{print $1, $3, $4}')"
+    log "二进制 = $BIN  ($(ls -l "$BIN" 2>/dev/null | awk '{print $1, $3":"$4}'))"
 else
-    log "!! mghelper 二进制未找到"
+    log "!! mghelper 二进制未找到（setuid 跳过）"
 fi
 
-# ---- 2) 守护进程 ----
-LC="$(command -v launchctl 2>/dev/null)"
-if [ -z "$LC" ]; then
-    for p in "$JB/basebin/launchctl" "$JB/bin/launchctl" /var/jb/bin/launchctl \
-             /bin/launchctl /usr/bin/launchctl ; do
-        [ -x "$p" ] && LC="$p" && break
+# ---- 2) 收集所有可能的 launchctl ----
+LCLIST=""
+add_lc() { [ -n "$1" ] && [ -x "$1" ] && LCLIST="$LCLIST $1"; }
+add_lc "$(command -v launchctl 2>/dev/null)"
+add_lc "$JB/basebin/launchctl"
+add_lc "$JB/bin/launchctl"
+add_lc "$JB/usr/bin/launchctl"
+add_lc /var/jb/basebin/launchctl
+add_lc /bin/launchctl
+add_lc /usr/bin/launchctl
+LCLIST="$(echo $LCLIST | tr ' ' '\n' | awk '!seen[$0]++' | tr '\n' ' ')"
+log "可用 launchctl:${LCLIST:- <无>}"
+
+# ---- 3) 守护进程：两套路径写法 x 多个 launchctl，逐个试 ----
+REALPLIST="$(lookup "$RELPATH" 2>/dev/null)"
+VROOTPLIST="/$RELPATH"          # roothide 的 launchctl 常吃这个（把 jbroot 当根）
+LOADED=""
+for PL in "$REALPLIST" "$VROOTPLIST" ; do
+    [ -n "$PL" ] || continue
+    [ -f "$PL" ] || { log "跳过（不存在）: $PL"; continue; }
+    chown root:wheel "$PL" 2>/dev/null
+    chmod 0644 "$PL" 2>/dev/null
+    for LC in $LCLIST ; do
+        "$LC" unload "$PL" >/dev/null 2>&1
+        if "$LC" load -w "$PL" >/dev/null 2>&1; then
+            log "OK load -w 成功: launchctl=$LC  plist=$PL"; LOADED=1; break
+        fi
+        if "$LC" bootstrap system "$PL" >/dev/null 2>&1; then
+            log "OK bootstrap 成功: launchctl=$LC  plist=$PL"; LOADED=1; break
+        fi
+        if "$LC" load "$PL" >/dev/null 2>&1; then
+            log "OK load 成功: launchctl=$LC  plist=$PL"; LOADED=1; break
+        fi
     done
-fi
-[ -z "$LC" ] && LC="launchctl"
+    [ -n "$LOADED" ] && break
+done
+[ -n "$LOADED" ] || log "!! 所有 launchctl 组合都没能加载守护进程"
 
-PLIST="$(lookup Library/LaunchDaemons/com.banliren.mghelper.bridge.plist 2>/dev/null)"
-if [ -n "$PLIST" ]; then
-    chown root:wheel "$PLIST" 2>/dev/null
-    chmod 0644 "$PLIST" 2>/dev/null
-    "$LC" unload "$PLIST" 2>/dev/null
-    if   "$LC" load -w "$PLIST" 2>/dev/null; then log "daemon loaded(-w): $PLIST"
-    elif "$LC" bootstrap system "$PLIST" 2>/dev/null; then log "daemon bootstrapped: $PLIST"
-    elif "$LC" load "$PLIST" 2>/dev/null; then log "daemon loaded: $PLIST"
-    else log "!! daemon load 失败 (launchctl=$LC plist=$PLIST)"; fi
-    log "launchctl list | grep mghelper: $("$LC" list 2>/dev/null | grep -i mghelper)"
-else
-    log "!! daemon plist 未找到"
+for LC in $LCLIST ; do
+    OUT="$("$LC" list 2>/dev/null | grep -i mghelper)"
+    [ -n "$OUT" ] && log "launchctl list ($LC): $OUT"
+done
+if [ -n "$LOADED" ]; then
+    sleep 1
+    if pgrep -x mghelper >/dev/null 2>&1; then
+        log "进程在跑: $(pgrep -x mghelper | tr '\n' ' ')"
+    else
+        log "（pgrep 没看到 mghelper 进程，可能未起来）"
+    fi
 fi
 
-# ---- 3) 预建日志目录 + 立刻同步一次 ----
+# ---- 4) 预建日志目录 + 立刻同步一次 ----
 mkdir -p "$JB/var/mobile/Library/MG7Widget" 2>/dev/null
 mkdir -p /var/mobile/Library/MG7Widget 2>/dev/null
 if [ -n "$BIN" ]; then
-    "$BIN" bridge-once 2>&1 | while read -r l; do log "$l"; done
+    "$BIN" bridge-once 2>&1 | while read -r l; do log "  $l"; done
+    LOG1="$(ls -l /var/mobile/Library/MG7Widget/bridge.log 2>/dev/null)"
+    LOG2="$(ls -l "$JB/var/mobile/Library/MG7Widget/bridge.log" 2>/dev/null)"
+    log "日志(bridge.log): ${LOG1:-无} ${LOG2:-}"
+fi
+
+# ---- 5) 踢 chronod，让小组件立刻重载 ----
+if command -v killall >/dev/null 2>&1; then
+    killall -9 chronod >/dev/null 2>&1 && log "已重启 chronod（小组件会立刻重载）"
+elif [ -x /usr/bin/killall ]; then
+    /usr/bin/killall -9 chronod >/dev/null 2>&1 && log "已重启 chronod（小组件会立刻重载）"
 fi
 
 exit 0
