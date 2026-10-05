@@ -45,6 +45,10 @@ enum Diagnostics {
         out.append("groupContainer=\(grp ?? "nil")")
 
         out.append("")
+        out.append("-- 运行时 entitlements（进程实际生效值，dlsym → SecTask）--")
+        out.append(contentsOf: runtimeEntitlements())
+
+        out.append("")
         out.append("-- 主 App 二进制 entitlements（安装后实际残留）--")
         out.append(contentsOf: binaryEntitlements(path: Bundle.main.executablePath ?? ""))
 
@@ -215,6 +219,56 @@ enum Diagnostics {
         let items = (try? FileManager.default.contentsOfDirectory(atPath: container)) ?? []
         out.append("container 内容: \(items.sorted().joined(separator: " "))")
         return out
+    }
+
+    // MARK: - 运行时 entitlements（dlsym 动态调用 SecTask，避开 SDK 未导出问题）
+
+    private static let runtimeKeys = [
+        "com.apple.private.security.no-sandbox",
+        "platform-application",
+        "com.apple.private.security.storage.AppDataContainers",
+        "com.apple.security.application-groups",
+        "com.apple.security.exception.files.absolute-path.read-write",
+        "com.apple.private.security.no-container",
+        "get-task-allow",
+        "task_for_pid-allow",
+        "com.apple.private.skip-library-validation",
+        "application-identifier",
+    ]
+
+    private static func runtimeEntitlements() -> [String] {
+        guard let task = secTaskFromSelf() else {
+            return ["  （SecTaskCreateFromSelf 取不到 —— 下面看二进制残留作参考）"]
+        }
+        var out: [String] = []
+        for k in runtimeKeys {
+            let v = secTaskValue(task, k)
+            out.append("  \(k) = \(v ?? "—缺失")")
+        }
+        return out
+    }
+
+    private static func secTaskFromSelf() -> UnsafeMutableRawPointer? {
+        guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "SecTaskCreateFromSelf") else {
+            return nil
+        }
+        typealias Fn = @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer?
+        let fn = unsafeBitCast(sym, to: Fn.self)
+        return fn(nil)
+    }
+
+    private static func secTaskValue(_ task: UnsafeMutableRawPointer, _ key: String) -> String? {
+        guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2),
+                              "SecTaskCopyValueForEntitlement") else { return nil }
+        typealias Fn = @convention(c) (UnsafeMutableRawPointer?,
+                                       UnsafeRawPointer?,
+                                       UnsafeMutableRawPointer?) -> UnsafeRawPointer?
+        let fn = unsafeBitCast(sym, to: Fn.self)
+        let cfKey = key as CFString
+        let keyPtr = Unmanaged.passUnretained(cfKey).toOpaque()
+        guard let r = fn(task, keyPtr, nil) else { return nil }
+        let obj = Unmanaged<AnyObject>.fromOpaque(r).takeRetainedValue()
+        return String(describing: obj).replacingOccurrences(of: "\n", with: " ")
     }
 
     // MARK: - Mach-O entitlements dump
