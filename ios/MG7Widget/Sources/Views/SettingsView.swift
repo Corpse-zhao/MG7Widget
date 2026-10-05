@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct SettingsView: View {
     @ObservedObject var vm: CarViewModel
@@ -17,6 +18,7 @@ struct SettingsView: View {
     @State private var plate = ""
     @State private var amapKey = ""
     @State private var coordsGCJ = true
+    @State private var diagText = "正在生成诊断信息…"
 
     var body: some View {
         NavigationView {
@@ -122,6 +124,31 @@ struct SettingsView: View {
                 } footer: {
                     Text("数据通道：显示「小组件数据注入 ✅」时，打开本 App / 下拉刷新都会把最新车况直接推进小组件沙盒，小组件每 15 分钟也会自主联网刷新。「App Group 未分配」是 TrollStore 签名下的正常现象，不影响新通道。")
                 }
+
+                // v0.4.19 诊断区：把注入失败的真实原因抓回来（截图或长按复制发我）
+                Section {
+                    ScrollView {
+                        Text(diagText)
+                            .font(.system(size: 9, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: 340)
+                    Button {
+                        UIPasteboard.general.string = diagText
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Text("拷贝诊断信息").font(.system(size: 14, weight: .semibold))
+                            Spacer()
+                        }
+                    }
+                    .foregroundColor(MGTheme.orange)
+                } header: {
+                    Text("诊断信息")
+                } footer: {
+                    Text("把这一段截图发我（或点上面按钮复制粘贴），里面有：运行时 uid、路径可达性的 errno、以及安装后二进制里实际残留的 entitlements —— 能直接定位「注入失败」到底断在哪。")
+                }
             }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
@@ -137,6 +164,10 @@ struct SettingsView: View {
                 plate = vm.config.plateNumber
                 amapKey = vm.config.amapKey
                 coordsGCJ = vm.config.coordsAreGCJ02
+            }
+            .task {
+                // 诊断含少量文件 IO，异步生成，避免进设置页卡顿
+                diagText = Diagnostics.fullReport()
             }
         }
     }
